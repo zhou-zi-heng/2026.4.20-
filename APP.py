@@ -1,7 +1,7 @@
 import streamlit as st
 import streamlit.components.v1 as components
 from openai import OpenAI
-import io, base64, json, re, requests, uuid, copy
+import io, base64, json, re, requests, uuid, copy, html
 from datetime import datetime
 from docx import Document
 from pypdf import PdfReader
@@ -49,14 +49,14 @@ if "initialized" not in st.session_state:
     st.session_state.ls_loaded = False
     st.session_state._needs_save = False
     st.session_state.is_streaming = False
-    st.session_state.ls_wait_count = 0  # 新增：等待计数器
+    st.session_state.ls_wait_count = 0  # 等待计数器，防止新用户死锁
 
 # 水合逻辑 (从 LocalStorage 读取)
 if not st.session_state.ls_loaded:
     saved_data = localS.getItem("zenmux_data", key="ls_get")
     st.session_state.ls_wait_count += 1
     
-    # 修复核心：如果拿到了数据，或者已经等了1个周期（说明是新用户，本地没数据），就放行
+    # 如果拿到了数据，或者已经等了1个周期（说明是新用户，本地没数据），就放行
     if saved_data is not None or st.session_state.ls_wait_count > 1: 
         default_profiles = [{
             "name": "默认引擎", "base_url": "", "api_key": "", "model": "anthropic/claude-3-5-sonnet-20240620",
@@ -87,13 +87,14 @@ if not st.session_state.ls_loaded:
     else:
         st.info("🔄 正在从本地安全存储加载数据，请稍候...")
         st.stop()
+
 # ==========================================
 # 3. 核心底层辅助函数
 # ==========================================
 def render_copy_button(text):
     b64 = base64.b64encode(text.encode("utf-8")).decode("utf-8")
     uid = uuid.uuid4().hex[:8]
-    html = (
+    html_code = (
         '<div style="display:flex;justify-content:flex-end;padding-right:10px;">'
         '<button id="cb' + uid + '" onclick="(function(b){navigator.clipboard.writeText('
         "decodeURIComponent(escape(atob('" + b64 + "')))).then(function(){"
@@ -103,7 +104,7 @@ def render_copy_button(text):
         'style="border:none;background:transparent;color:#aaa;cursor:pointer;font-size:12px;'
         'font-weight:bold;padding:5px 10px;border-radius:6px;">📋 复制</button></div>'
     )
-    components.html(html, height=30)
+    components.html(html_code, height=30)
 
 def clean_novel_text(text):
     text = re.sub(r'^\s*(好的|没问题|非常荣幸|收到|为你生成|以下是|这是为您|正文开始|下面是).*?[:：]\n*', '', text, flags=re.MULTILINE | re.IGNORECASE)
@@ -144,6 +145,71 @@ def generate_word_doc(messages, is_pure=False):
     bio = io.BytesIO()
     doc.save(bio)
     return bio.getvalue()
+
+def export_to_pretty_html(messages, title, meta=None):
+    if meta is None: meta = {}
+    css = """
+    * { margin:0; padding:0; box-sizing:border-box; }
+    body { font-family: -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif; background:#f0f2f5; color:#1a1a1a; }
+    .header { background:linear-gradient(135deg,#667eea 0%,#764ba2 100%); color:#fff; padding:24px 32px; position:sticky; top:0; z-index:100; box-shadow:0 2px 12px rgba(0,0,0,.15); }
+    .header h1 { font-size:22px; font-weight:700; }
+    .header .meta { font-size:12px; opacity:.75; margin-top:6px; }
+    .chat-container { max-width:860px; margin:0 auto; padding:24px 16px 80px; }
+    .info-card { background:#fff; border-radius:12px; padding:20px 24px; margin-bottom:24px; box-shadow:0 1px 4px rgba(0,0,0,.06); border-left:4px solid #667eea; }
+    .info-card h3 { font-size:14px; color:#667eea; margin-bottom:12px; font-weight:700; }
+    .info-row { display:flex; margin-bottom:8px; font-size:13px; line-height:1.6; }
+    .info-label { color:#888; min-width:90px; flex-shrink:0; font-weight:600; }
+    .info-value { color:#333; word-break:break-all; }
+    .info-value.prompt { background:#f8f8f8; padding:8px 12px; border-radius:6px; font-size:12px; line-height:1.7; margin-top:4px; white-space:pre-wrap; max-height:200px; overflow-y:auto; }
+    .file-tag { display:inline-block; background:#f0f0f0; padding:2px 10px; border-radius:12px; font-size:12px; color:#555; margin:2px 4px 2px 0; }
+    .msg { display:flex; gap:12px; margin-bottom:24px; align-items:flex-start; }
+    .msg.user { flex-direction:row-reverse; }
+    .avatar { width:36px; height:36px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:18px; flex-shrink:0; }
+    .msg.ai .avatar { background:#e8f5e9; }
+    .msg.user .avatar { background:#e3f2fd; }
+    .bubble { max-width:75%; padding:14px 18px; border-radius:16px; line-height:1.8; font-size:15px; word-wrap:break-word; white-space:pre-wrap; box-shadow:0 1px 3px rgba(0,0,0,.06); }
+    .msg.ai .bubble { background:#fff; border-top-left-radius:4px; }
+    .msg.user .bubble { background:#d1e7ff; border-top-right-radius:4px; }
+    .word-count { font-size:11px; color:#999; margin-top:6px; text-align:right; }
+    .msg.user .word-count { text-align:left; }
+    .footer { text-align:center; padding:32px; font-size:12px; color:#aaa; border-top:1px solid #e5e5e5; max-width:860px; margin:0 auto; }
+    """
+    js = """
+    <script>
+    function toggleInfo() {
+        var el = document.getElementById('infoCard');
+        if(el.style.display==='none'){el.style.display='block';}else{el.style.display='none';}
+    }
+    </script>
+    """
+    info_html = ""
+    has_meta = any(meta.get(k) for k in ["source", "system_prompt", "model", "files"])
+    if has_meta:
+        rows = ""
+        if meta.get("model"): rows += f'<div class="info-row"><span class="info-label">🧠 模型</span><span class="info-value">{meta["model"]}</span></div>'
+        if meta.get("files"):
+            tags = "".join([f'<span class="file-tag">📄 {f["filename"]} ({f.get("size", 0):,} 字)</span>' for f in meta["files"]])
+            rows += f'<div class="info-row"><span class="info-label">📎 挂载文件</span><span class="info-value">{tags}</span></div>'
+        if meta.get("system_prompt"):
+            rows += f'<div class="info-row"><span class="info-label">🎭 人设</span></div><div class="info-value prompt">{html.escape(meta["system_prompt"])}</div>'
+        info_html = f'<div class="info-card" id="infoCard"><h3>⚙️ 对话配置信息</h3>{rows}</div>'
+
+    msg_html = ""
+    for m in messages:
+        if m["role"] == "system": continue
+        is_user = m["role"] == "user"
+        role_class = "user" if is_user else "ai"
+        avatar = "🙋‍♂️" if is_user else "🤖"
+        safe = html.escape(m["content"]).replace('\n', '<br>')
+        wc = count_words(m["content"])
+        msg_html += f'<div class="msg {role_class}"><div class="avatar">{avatar}</div><div><div class="bubble">{safe}</div><div class="word-count">{wc} 字</div></div></div>'
+
+    date_str = datetime.now().strftime('%Y-%m-%d %H:%M')
+    total_ai_words = sum(count_words(m["content"]) for m in messages if m["role"] == "assistant")
+    toggle_link = '<span style="margin-left:12px;text-decoration:underline;cursor:pointer;" onclick="toggleInfo()">展开/收起配置</span>' if has_meta else ""
+    
+    full_html = f"""<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{title}</title><style>{css}</style></head><body><div class="header"><h1>💬 {title}</h1><div class="meta">{date_str} | AI 共 {total_ai_words:,} 字 {toggle_link}</div></div><div class="chat-container">{info_html}{msg_html}</div><div class="footer">ZenMux AI 创作者工作站</div>{js}</body></html>"""
+    return full_html.encode('utf-8')
 
 def fetch_models(base_url, api_key):
     try:
@@ -305,9 +371,17 @@ if st.session_state.current_page == "💬 自由聊天区":
             else:
                 txt_c = "\n".join([f"{'我' if m['role']=='user' else 'AI'}:\n{m['content']}\n\n{'-'*40}\n" for m in curr_msgs])
                 
-            ec1, ec2 = st.columns(2)
+            ec1, ec2, ec3 = st.columns(3)
             ec1.download_button("📥 下载 TXT", txt_c.encode('utf-8'), f"{curr_chat['title']}.txt", use_container_width=True)
             ec2.download_button("📥 下载 Word", generate_word_doc(curr_msgs, is_pure), f"{curr_chat['title']}.docx", use_container_width=True)
+            
+            # 构造 HTML 导出的元数据
+            export_meta = {
+                "system_prompt": curr_chat.get("system_prompt", ""),
+                "model": active_p["model"],
+                "files": [{"filename": k["filename"], "size": len(k["content"])} for k in curr_chat.get("session_knowledge", [])]
+            }
+            ec3.download_button("🎨 下载 HTML", export_to_pretty_html(curr_msgs, curr_chat["title"], export_meta), f"{curr_chat['title']}.html", "text/html", use_container_width=True)
 
     # --- 对话设置区 (常驻知识库) ---
     has_content = bool(curr_chat.get("session_knowledge") or curr_chat.get("system_prompt"))
