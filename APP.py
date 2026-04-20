@@ -7,7 +7,7 @@ from pypdf import PdfReader
 from streamlit_local_storage import LocalStorage
 
 # ==========================================
-# 1. 页面全局配置与前端美化 (包含布局黑魔法)
+# 1. 页面全局配置与前端美化 (包含终极布局黑魔法)
 # ==========================================
 st.set_page_config(page_title="ZenMux 创作者工作站", page_icon="🐙", layout="wide")
 st.markdown("""
@@ -21,37 +21,44 @@ st.markdown("""
         .block-container { padding-top: 1rem; padding-bottom: 5rem; }
     }
 
-    /* 🔥 终极黑魔法：将加号按钮强行拽入输入框最左侧 */
-    /* 给文本输入区让出左侧的 45px 空间 */
-    [data-testid="stChatInput"] textarea {
-        padding-left: 3rem !important;
+    /* 🔥 终极黑魔法：精准狙击并强行拽入输入框 */
+    /* 1. 给底层的对话输入框强行留出左侧 3.5rem 的安全距离，防止文字被按钮遮挡 */
+    div[data-testid="stChatInput"] textarea {
+        padding-left: 3.5rem !important;
     }
     
-    /* 利用 help 属性精准狙击挂载按钮，将其绝对定位到屏幕底部 */
-    button[title="挂载附件"] {
+    /* 2. 找到紧跟在“隐形锚点(#attach-anchor)”后面的 Popover 容器 */
+    div[data-testid="stElementContainer"]:has(#attach-anchor) + div[data-testid="stElementContainer"] {
         position: fixed !important;
-        bottom: 3.2rem; /* 电脑端输入框高度适配 */
-        z-index: 99999;
-        background: transparent !important;
+        bottom: 27px !important; /* 根据 Streamlit 默认底边距微调，使其在输入框中垂直居中 */
+        z-index: 999999 !important;
+        /* 重点：不写 left/right 属性，让它自然继承主容器的左边距，从而完美适配侧边栏的展开/折叠！ */
+    }
+    
+    /* 3. 剥离按钮默认样式，使其融入输入框背景 */
+    div[data-testid="stElementContainer"]:has(#attach-anchor) + div[data-testid="stElementContainer"] button {
+        background-color: transparent !important;
         border: none !important;
         box-shadow: none !important;
-        font-size: 1.2rem !important;
+        font-size: 1.5rem !important;
         padding: 0 !important;
-        width: 35px !important;
-        height: 35px !important;
-        transform: translateX(10px); /* 微调位置刚好卡进输入框 */
-        color: #666;
+        width: 40px !important;
+        height: 40px !important;
+        color: #666 !important;
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
     }
-    button[title="挂载附件"]:hover {
-        color: #000;
-        background: #f0f2f5 !important;
-        border-radius: 50%;
+    div[data-testid="stElementContainer"]:has(#attach-anchor) + div[data-testid="stElementContainer"] button:hover {
+        color: #000 !important;
+        background-color: #f0f2f5 !important;
+        border-radius: 50% !important;
     }
-    
-    /* 手机端由于输入框变窄，微调高度 */
+
+    /* 手机端底边距微调 */
     @media (max-width: 768px) {
-        button[title="挂载附件"] {
-            bottom: 2.1rem;
+        div[data-testid="stElementContainer"]:has(#attach-anchor) + div[data-testid="stElementContainer"] {
+            bottom: 22px !important;
         }
     }
     </style>
@@ -89,7 +96,7 @@ if "initialized" not in st.session_state:
     st.session_state.is_streaming = False
     st.session_state.ls_wait_count = 0
 
-# 水合逻辑 (带手机端拦截逃逸机制)
+# 水合逻辑
 if not st.session_state.ls_loaded:
     saved_data = None
     if localS:
@@ -248,7 +255,7 @@ def build_api_kwargs(profile, api_msgs):
     return kw
 
 # ==========================================
-# 4. 全局侧边栏导航 (已整合会话列表)
+# 4. 全局侧边栏导航
 # ==========================================
 with st.sidebar:
     st.header("控制中枢")
@@ -259,7 +266,6 @@ with st.sidebar:
             st.session_state.current_page = pg
             st.rerun()
             
-    # 🌟 优化：将会话列表彻底移入左侧边栏
     if st.session_state.current_page == "💬 自由聊天区":
         st.divider()
         st.markdown("### 📚 会话管理")
@@ -322,15 +328,13 @@ with st.sidebar:
                 st.error(f"导入失败: {e}")
 
 # ==========================================
-# 模块 1: 自由聊天区 (极致清爽版)
+# 模块 1: 自由聊天区
 # ==========================================
 if st.session_state.current_page == "💬 自由聊天区":
-    # --- 当前会话主体 ---
     if st.session_state.current_chat_id not in st.session_state.free_chats:
         st.session_state.current_chat_id = list(st.session_state.free_chats.keys())[-1]
     curr_chat = st.session_state.free_chats[st.session_state.current_chat_id]
     
-    # 标题与终极聚合操作菜单
     tc1, tc2 = st.columns([15, 1]) 
     with tc1:
         new_title = st.text_input("会话标题", curr_chat["title"], label_visibility="collapsed")
@@ -390,7 +394,6 @@ if st.session_state.current_page == "💬 自由聊天区":
             export_meta = {"system_prompt": curr_chat.get("system_prompt", ""), "model": active_p["model"]}
             st.download_button("🎨 下载 HTML", export_to_pretty_html(curr_msgs, curr_chat["title"], export_meta), f"{curr_chat['title']}.html", "text/html", use_container_width=True)
 
-    # 聊天消息展示区
     with st.container(border=False):
         editing_idx = st.session_state.get("_editing_chat_idx")
         
@@ -449,8 +452,9 @@ if st.session_state.current_page == "💬 自由聊天区":
     need_resend = st.session_state.pop("_auto_resend", False)
     resume_idx = st.session_state.pop("_resume_idx", None)
     
-    # 🌟 优化：挂载按钮。利用顶部的 CSS 黑魔法，它会自动跑到输入框内部的最左侧去！
-    with st.popover("➕", help="挂载附件"):
+    # 🌟 核心修改点：利用唯一的 DOM 锚点定位挂载按钮
+    st.markdown('<span id="attach-anchor"></span>', unsafe_allow_html=True)
+    with st.popover("➕"):
         dyn_file = st.file_uploader("📎 上传单次文档", type=['txt', 'md', 'pdf', 'docx'], key="dyn_file")
         is_continuous = st.checkbox("🔄 持续参考 (勾选后一直带入后续对话)", value=False)
 
