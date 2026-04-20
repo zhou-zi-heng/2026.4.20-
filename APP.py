@@ -12,39 +12,27 @@ from streamlit_local_storage import LocalStorage
 st.set_page_config(page_title="ZenMux 创作者工作站", page_icon="🐙", layout="wide")
 st.markdown("""
     <style>
-    /* 1. 毁灭级封杀：彻底清除右下角/右上角所有 Streamlit 官方水印、Manage App 和部署按钮 */
-    [data-testid="stDeployButton"],
-    .stDeployButton,
-    header .stAppDeployButton,
-    [class*="viewerBadge"],
-    [data-testid="stStatusWidget"],
-    #Manage-app {
-        display: none !important;
-        visibility: hidden !important;
-        opacity: 0 !important;
-        width: 0 !important;
-        height: 0 !important;
-        pointer-events: none !important;
-        position: absolute !important;
-        z-index: -999 !important;
-    }
-
-    /* 强制保护左侧边栏的展开汉堡按钮 */
+    /* 保护侧边栏的展开汉堡按钮，永远置顶不被遮挡 */
     [data-testid="collapsedControl"] {
         display: flex !important;
         visibility: visible !important;
         z-index: 999999 !important; 
     }
 
-    /* 2. 纯比例自适应吸顶标题栏 - 终极压缩宽高度 */
+    /* 页面安全边距：顶部给系统栏留空，底部给悬浮附件按钮留空 */
+    .block-container { 
+        padding-top: 3.5rem !important; 
+        padding-bottom: 6rem !important; 
+    }
+
+    /* --- 核心优化：极窄吸顶标题栏 --- */
     div[data-testid="stHorizontalBlock"]:has(#sticky-header) {
         position: sticky !important;
-        top: 3.5rem !important; /* 电脑端顶部安全距离 */
+        top: 3.5rem !important; /* 电脑端吸顶距离 */
         z-index: 990 !important;
         background-color: var(--background-color, #ffffff) !important;
-        /* 彻底抛弃 px，改用 vh (视口高度比例) 和 vw (视口宽度比例) */
-        padding: 0.8vh 2vw !important; 
-        margin-top: -1.5vh !important;
+        padding: 4px 16px !important; /* 回归安全可靠的固定像素边距 */
+        margin-top: -15px !important;
         border-bottom: 1px solid #e5e7eb !important;
         align-items: center !important;
         min-height: 0 !important; /* 斩断框架自带的撑高 */
@@ -52,92 +40,66 @@ st.markdown("""
     
     @media (max-width: 768px) {
         div[data-testid="stHorizontalBlock"]:has(#sticky-header) {
-            top: 2.8rem !important; /* 手机端紧凑一点 */
-            padding: 0.5vh 1vw !important;
+            top: 2.8rem !important; /* 手机端吸顶距离 */
+            padding: 4px 8px !important;
         }
     }
     
-    /* 暴力剥离 TextInput 内部所有的默认撑起高度、边距和背景 */
+    /* 暴力剥离输入框自带的边距、高度和焦点蓝框 */
     div[data-testid="stHorizontalBlock"]:has(#sticky-header) [data-testid="stTextInput"] {
-        margin: 0 !important;
-        padding: 0 !important;
+        margin: 0 !important; padding: 0 !important;
     }
     div[data-testid="stHorizontalBlock"]:has(#sticky-header) div[data-baseweb="input"] {
         background-color: transparent !important;
         border: none !important;
         box-shadow: none !important;
         min-height: 0 !important; /* 致命一击，取消原生输入框高度 */
-        padding: 0 !important;
-        margin: 0 !important;
+        padding: 0 !important; margin: 0 !important;
     }
     div[data-testid="stHorizontalBlock"]:has(#sticky-header) input {
-        /* clamp 函数：最小 1rem，最佳 4vw (随屏幕比例变动)，最大 1.2rem */
-        font-size: clamp(1rem, 4vw, 1.2rem) !important; 
-        line-height: 1 !important;
+        font-size: 1.1rem !important; 
+        line-height: 1.2 !important;
         font-weight: bold !important;
-        padding: 0 !important;
-        margin: 0 !important;
+        padding: 0 !important; margin: 0 !important;
         height: auto !important;
         color: var(--text-color, #1f2937) !important;
     }
     
-    /* 极致压缩 Popover 箭头按钮的边距 */
+    /* 手机端严格锁定 16px 字体，防止 iOS 自动缩放页面导致变丑 */
+    @media (max-width: 768px) {
+        div[data-testid="stHorizontalBlock"]:has(#sticky-header) input {
+            font-size: 16px !important;
+        }
+    }
+    
+    /* 极致压缩右侧设置小箭头的边距 */
     div[data-testid="stHorizontalBlock"]:has(#sticky-header) [data-testid="stPopover"] {
-        margin: 0 !important;
-        padding: 0 !important;
-        display: flex;
-        align-items: center;
-        justify-content: flex-end;
+        margin: 0 !important; padding: 0 !important; display: flex; align-items: center; justify-content: flex-end;
     }
     div[data-testid="stHorizontalBlock"]:has(#sticky-header) [data-testid="stPopover"] > button {
-        background: transparent !important;
-        border: none !important;
-        box-shadow: none !important;
-        padding: 0 !important;
-        margin: 0 !important;
-        height: auto !important;
-        line-height: 1 !important;
-        /* 箭头大小同样随屏幕比例缩放 */
-        font-size: clamp(1.2rem, 5vw, 1.4rem) !important;
-        color: #9ca3af !important;
-        display: flex !important;
-        justify-content: flex-end !important;
+        background: transparent !important; border: none !important; box-shadow: none !important;
+        padding: 0 !important; margin: 0 !important; height: auto !important; line-height: 1 !important;
+        font-size: 1.4rem !important; color: #9ca3af !important; display: flex !important; justify-content: flex-end !important;
     }
     div[data-testid="stHorizontalBlock"]:has(#sticky-header) [data-testid="stPopover"] > button:hover {
         color: #667eea !important;
     }
 
-    /* 3. 页面边距与悬浮附件按钮 */
-    .block-container { 
-        padding-top: 3.5rem !important; 
-        padding-bottom: 6rem !important; 
-    }
-
+    /* --- 悬浮附件按钮 --- */
     div.stMain div[data-testid="stPopover"]:last-of-type {
         position: fixed !important;
-        bottom: 95px !important;  
-        left: 5rem !important;    
-        z-index: 99999 !important;
+        bottom: 95px !important; left: 5rem !important; z-index: 99999 !important;
     }
-
     div.stMain div[data-testid="stPopover"]:last-of-type button {
-        background-color: #ffffff !important;
-        border: 1px solid #d1d5db !important;
-        border-radius: 20px !important;
-        padding: 4px 16px !important;
-        box-shadow: 0 4px 10px rgba(0,0,0,0.08) !important;
-        color: #374151 !important;
-        font-weight: normal !important;
+        background-color: #ffffff !important; border: 1px solid #d1d5db !important; border-radius: 20px !important;
+        padding: 4px 16px !important; box-shadow: 0 4px 10px rgba(0,0,0,0.08) !important; color: #374151 !important; font-weight: normal !important;
     }
     div.stMain div[data-testid="stPopover"]:last-of-type button:hover {
-        border-color: #667eea !important;
-        color: #667eea !important;
+        border-color: #667eea !important; color: #667eea !important;
     }
-
     @media (max-width: 768px) {
         div.stMain div[data-testid="stPopover"]:last-of-type {
-            bottom: 82px !important;  
-            left: 1rem !important;    
+            bottom: 82px !important; left: 1rem !important;
         }
     }
     </style>
@@ -271,6 +233,25 @@ def build_api_kwargs(profile, api_msgs):
         if profile.get(f"use_{key}", key in ["temperature", "max_tokens"]): kw[key] = profile.get(key)
     return kw
 
+# 官方全局弹窗：适配性极高的导出控制台
+dialog_decorator = getattr(st, "dialog", getattr(st, "experimental_dialog", None))
+if dialog_decorator:
+    @dialog_decorator("📦 导出对话记录")
+    def render_export_modal(curr_chat, active_p):
+        st.write("请选择导出格式：")
+        exp_mode = st.radio("导出格式", ["完整记录 (含提问)", "纯享正文 (仅 AI 回答)"], horizontal=True, label_visibility="collapsed")
+        is_pure = (exp_mode == "纯享正文 (仅 AI 回答)")
+        txt_c = "\n\n".join([clean_novel_text(m['content']) for m in curr_chat["messages"] if m['role'] == 'assistant']) if is_pure else "\n".join([f"{'我' if m['role']=='user' else 'AI'}:\n{m['content']}\n\n{'-'*40}\n" for m in curr_chat["messages"]])
+        
+        c1, c2, c3 = st.columns(3)
+        c1.download_button("📥 TXT", txt_c.encode('utf-8'), f"{curr_chat['title']}.txt", use_container_width=True)
+        c2.download_button("📥 Word", generate_word_doc(curr_chat["messages"], is_pure), f"{curr_chat['title']}.docx", use_container_width=True)
+        c3.download_button("🎨 HTML", export_to_pretty_html(curr_chat["messages"], curr_chat["title"], {"system_prompt": curr_chat.get("system_prompt", ""), "model": active_p["model"]}), f"{curr_chat['title']}.html", "text/html", use_container_width=True)
+        
+        st.divider()
+        if st.button("❌ 关闭窗口", use_container_width=True, type="secondary"):
+            st.rerun()
+
 # ==========================================
 # 4. 全局侧边栏 (控制台与历史管理)
 # ==========================================
@@ -283,7 +264,6 @@ with st.sidebar:
     st.divider()
 
     if page == "💬 自由聊天区":
-        # 当前会话指针防护
         if st.session_state.current_chat_id not in st.session_state.free_chats:
             st.session_state.current_chat_id = list(st.session_state.free_chats.keys())[-1]
         curr_chat = st.session_state.free_chats[st.session_state.current_chat_id]
@@ -295,7 +275,6 @@ with st.sidebar:
             trigger_save()
             st.rerun()
 
-        # 分组1：历史对话
         with st.expander("📚 历史对话", expanded=True):
             search_q = st.text_input("🔍 搜索", label_visibility="collapsed", placeholder="搜索历史...")
             chat_items = [(cid, cdata) for cid, cdata in st.session_state.free_chats.items() if not cdata.get("is_archived", False) and (not search_q or search_q.lower() in cdata["title"].lower())]
@@ -320,7 +299,6 @@ with st.sidebar:
                             trigger_save()
                             st.rerun()
 
-        # 数据快照备份
         st.divider()
         with st.expander("📦 全量数据快照迁移", expanded=False):
             full_data = json.dumps({"profiles": st.session_state.profiles, "free_chats": st.session_state.free_chats}, ensure_ascii=False, indent=2).encode('utf-8')
@@ -343,7 +321,11 @@ with st.sidebar:
 if st.session_state.current_page == "💬 自由聊天区":
     curr_chat = st.session_state.free_chats[st.session_state.current_chat_id]
     
-    # --- 核心修改：高度压缩、比例自适应的吸顶操作栏 ---
+    # 检测到触发了导出指令，立刻调用全局模态弹窗
+    if st.session_state.pop("_trigger_export", False) and dialog_decorator:
+        render_export_modal(curr_chat, active_p)
+
+    # --- 核心修改：高度压缩、吸顶的操作栏 ---
     tc1, tc2 = st.columns([15, 1]) 
     with tc1:
         st.markdown('<span id="sticky-header"></span>', unsafe_allow_html=True)
@@ -367,9 +349,14 @@ if st.session_state.current_page == "💬 自由聊天区":
                 curr_chat["messages"] = []
                 trigger_save()
                 st.rerun()
+                
+            # 点击导出，激活弹窗标志位并刷新
             if btn_c2.button("📥 导出", use_container_width=True):
-                st.session_state._show_export = not st.session_state.get("_show_export", False)
-                st.rerun()
+                if dialog_decorator:
+                    st.session_state._trigger_export = True
+                    st.rerun()
+                else:
+                    st.error("此版本的 Streamlit 不支持弹窗，请更新框架。")
                 
             st.divider()
             
@@ -390,17 +377,6 @@ if st.session_state.current_page == "💬 自由聊天区":
                     curr_chat["session_knowledge"].pop(ki)
                     trigger_save()
                     st.rerun()
-
-    # 导出面板
-    if st.session_state.get("_show_export", False):
-        with st.container(border=True):
-            exp_mode = st.radio("导出格式", ["完整记录", "纯享正文"], horizontal=True, label_visibility="collapsed")
-            is_pure = (exp_mode == "纯享正文")
-            txt_c = "\n\n".join([clean_novel_text(m['content']) for m in curr_chat["messages"] if m['role'] == 'assistant']) if is_pure else "\n".join([f"{'我' if m['role']=='user' else 'AI'}:\n{m['content']}\n\n{'-'*40}\n" for m in curr_chat["messages"]])
-            ec1, ec2, ec3 = st.columns(3)
-            ec1.download_button("📥 TXT", txt_c.encode('utf-8'), f"{curr_chat['title']}.txt", use_container_width=True)
-            ec2.download_button("📥 Word", generate_word_doc(curr_chat["messages"], is_pure), f"{curr_chat['title']}.docx", use_container_width=True)
-            ec3.download_button("🎨 HTML", export_to_pretty_html(curr_chat["messages"], curr_chat["title"], {"system_prompt": curr_chat.get("system_prompt", ""), "model": active_p["model"]}), f"{curr_chat['title']}.html", "text/html", use_container_width=True)
 
     # 无限向下滚动的聊天区域
     with st.container(border=False):
