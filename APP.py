@@ -7,22 +7,67 @@ from pypdf import PdfReader
 from streamlit_local_storage import LocalStorage
 
 # ==========================================
-# 1. 页面全局配置与前端美化
+# 1. 页面全局配置与前端美化 (包含终极布局黑魔法)
 # ==========================================
 st.set_page_config(page_title="ZenMux 创作者工作站", page_icon="🐙", layout="wide")
 st.markdown("""
     <style>
     .stButton>button { border-radius: 8px; font-weight: bold; transition: all 0.3s; }
-    .stChatInput { padding-bottom: 20px; }
     button[title="View fullscreen"] {display: none;}
-    .css-1jc7ptx, .e1ewe7hr3, .viewerBadge_container__1QSob, .styles_viewerBadge__1yB5_ {display: none;}
-    /* 手机端极简适配优化 */
-    @media (max-width: 768px) {
-        .block-container { padding-top: 1rem; padding-bottom: 5rem; }
+    
+    /* 🔥 痛点1解决：彻底屏蔽右上角所有烦人的标志和部署按钮，但保留左侧展开侧边栏的汉堡菜单 */
+    .viewerBadge_container__1QSob, 
+    .styles_viewerBadge__1yB5_,
+    [data-testid="stToolbar"], 
+    [data-testid="stHeader"] .stAppDeployButton {
+        display: none !important;
+        visibility: hidden !important;
+        pointer-events: none !important;
     }
-    /* 弱化小加号按钮的边框，使其更隐形 */
-    [data-testid="stPopover"] > button { border-color: transparent; background: transparent; box-shadow: none; padding: 0.5rem; font-size: 1.2rem; }
-    [data-testid="stPopover"] > button:hover { border-color: #e0e0e0; background: #f8f9fa; }
+
+    /* 确保顶部有足够的安全距离，防止标题被隐藏的系统栏遮挡 */
+    .block-container {
+        padding-top: 3.5rem !important;
+    }
+
+    /* 手机端极简适配优化，增加顶部留白 */
+    @media (max-width: 768px) {
+        .block-container { 
+            padding-top: 4.5rem !important; 
+            padding-bottom: 5rem; 
+        }
+    }
+
+    /* 🔥 痛点2解决：外部悬浮锚定。选取锚点身后的组件（即附件按钮），将其强制悬浮在输入框的左上方 */
+    div[data-testid="stElementContainer"]:has(#attach-anchor-start) + div[data-testid="stElementContainer"] {
+        position: fixed !important;
+        bottom: 95px !important; /* 电脑端距离底部的距离，刚好悬停在输入框上方 */
+        left: 4.5rem !important; /* 电脑端距离左侧的距离 */
+        z-index: 99999 !important;
+    }
+
+    /* 将悬浮按钮美化成一个小胶囊，不突兀 */
+    div[data-testid="stElementContainer"]:has(#attach-anchor-start) + div[data-testid="stElementContainer"] button {
+        background: #ffffff !important;
+        border: 1px solid #e5e7eb !important;
+        border-radius: 20px !important;
+        padding: 4px 16px !important;
+        box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1) !important;
+        color: #4b5563 !important;
+        font-size: 0.9rem !important;
+    }
+    div[data-testid="stElementContainer"]:has(#attach-anchor-start) + div[data-testid="stElementContainer"] button:hover {
+        color: #667eea !important;
+        border-color: #667eea !important;
+    }
+
+    /* 手机端适配：胶囊按钮紧贴手机屏幕左侧，悬停在输入框上方 */
+    @media (max-width: 768px) {
+        div[data-testid="stElementContainer"]:has(#attach-anchor-start) + div[data-testid="stElementContainer"] {
+            bottom: 85px !important;
+            left: 1rem !important;
+        }
+    }
     </style>
 """, unsafe_allow_html=True)
 
@@ -58,7 +103,7 @@ if "initialized" not in st.session_state:
     st.session_state.is_streaming = False
     st.session_state.ls_wait_count = 0
 
-# 水合逻辑 (带手机端拦截逃逸机制)
+# 水合逻辑
 if not st.session_state.ls_loaded:
     saved_data = None
     if localS:
@@ -228,6 +273,43 @@ with st.sidebar:
             st.session_state.current_page = pg
             st.rerun()
             
+    if st.session_state.current_page == "💬 自由聊天区":
+        st.divider()
+        st.markdown("### 📚 会话管理")
+        col_new, col_search = st.columns([1, 2])
+        if col_new.button("➕ 新对话", use_container_width=True, type="primary"):
+            nid = str(uuid.uuid4())
+            st.session_state.free_chats[nid] = {"title": "新对话", "messages": [], "session_knowledge": [], "system_prompt": "", "is_pinned": False, "is_archived": False}
+            st.session_state.current_chat_id = nid
+            trigger_save()
+            st.rerun()
+        search_q = col_search.text_input("🔍 搜索历史", label_visibility="collapsed", placeholder="搜索历史对话...")
+
+        chat_items = [(cid, cdata) for cid, cdata in st.session_state.free_chats.items() if not cdata.get("is_archived", False) and (not search_q or search_q.lower() in cdata["title"].lower())]
+        chat_items.sort(key=lambda x: x[1].get("is_pinned", False), reverse=True)
+
+        for cid, cdata in chat_items:
+            prefix = "📌 " if cdata.get("is_pinned") else "📄 "
+            if cid == st.session_state.current_chat_id: prefix = "⭐ "
+            if st.button(prefix + cdata["title"], key=f"sel_{cid}", use_container_width=True):
+                st.session_state.current_chat_id = cid
+                st.rerun()
+                
+        if st.button("🗄️ 查看归档区", use_container_width=True):
+            st.session_state._show_archive = not st.session_state.get("_show_archive", False)
+            st.rerun()
+            
+        if st.session_state.get("_show_archive", False):
+            st.caption("🗄️ 归档会话")
+            for cid, cdata in st.session_state.free_chats.items():
+                if cdata.get("is_archived", False):
+                    cc1, cc2 = st.columns([3, 1])
+                    cc1.markdown(f"📦 {cdata['title']}")
+                    if cc2.button("恢复", key=f"unarch_{cid}"):
+                        cdata["is_archived"] = False
+                        trigger_save()
+                        st.rerun()
+            
     active_p = st.session_state.profiles[st.session_state.active_profile_idx]
     st.divider()
     st.caption(f"🟢 **当前挂载**: {active_p['name']}\n🧠 **模型**: {active_p['model']}")
@@ -253,53 +335,14 @@ with st.sidebar:
                 st.error(f"导入失败: {e}")
 
 # ==========================================
-# 模块 1: 自由聊天区 (核心主战场)
+# 模块 1: 自由聊天区
 # ==========================================
 if st.session_state.current_page == "💬 自由聊天区":
-    # --- 顶部会话管理 (手机端安全排版) ---
-    with st.expander("📚 会话列表与管理", expanded=False):
-        col_new, col_search = st.columns([1, 2])
-        if col_new.button("➕ 新对话", use_container_width=True, type="primary"):
-            nid = str(uuid.uuid4())
-            st.session_state.free_chats[nid] = {"title": "新对话", "messages": [], "session_knowledge": [], "system_prompt": "", "is_pinned": False, "is_archived": False}
-            st.session_state.current_chat_id = nid
-            trigger_save()
-            st.rerun()
-        search_q = col_search.text_input("🔍 搜索历史", label_visibility="collapsed", placeholder="搜索历史对话...")
-
-        chat_items = [(cid, cdata) for cid, cdata in st.session_state.free_chats.items() if not cdata.get("is_archived", False) and (not search_q or search_q.lower() in cdata["title"].lower())]
-        chat_items.sort(key=lambda x: x[1].get("is_pinned", False), reverse=True)
-
-        for cid, cdata in chat_items:
-            prefix = "📌 " if cdata.get("is_pinned") else "📄 "
-            if cid == st.session_state.current_chat_id: prefix = "⭐ "
-            if st.button(prefix + cdata["title"], key=f"sel_{cid}", use_container_width=True):
-                st.session_state.current_chat_id = cid
-                st.rerun()
-                
-        if st.button("🗄️ 查看归档区", use_container_width=True):
-            st.session_state._show_archive = not st.session_state.get("_show_archive", False)
-            st.rerun()
-            
-        if st.session_state.get("_show_archive", False):
-            st.markdown("---")
-            st.caption("🗄️ 归档会话")
-            for cid, cdata in st.session_state.free_chats.items():
-                if cdata.get("is_archived", False):
-                    cc1, cc2 = st.columns([3, 1])
-                    cc1.markdown(f"📦 {cdata['title']}")
-                    if cc2.button("恢复", key=f"unarch_{cid}"):
-                        cdata["is_archived"] = False
-                        trigger_save()
-                        st.rerun()
-
-    # --- 当前会话主体 ---
     if st.session_state.current_chat_id not in st.session_state.free_chats:
         st.session_state.current_chat_id = list(st.session_state.free_chats.keys())[-1]
     curr_chat = st.session_state.free_chats[st.session_state.current_chat_id]
     
-    # 🌟 优化：标题与终极聚合操作菜单
-    tc1, tc2 = st.columns([15, 1]) # 让标题框无限拉伸，菜单极致浓缩
+    tc1, tc2 = st.columns([15, 1]) 
     with tc1:
         new_title = st.text_input("会话标题", curr_chat["title"], label_visibility="collapsed")
         if new_title != curr_chat["title"]:
@@ -358,8 +401,6 @@ if st.session_state.current_page == "💬 自由聊天区":
             export_meta = {"system_prompt": curr_chat.get("system_prompt", ""), "model": active_p["model"]}
             st.download_button("🎨 下载 HTML", export_to_pretty_html(curr_msgs, curr_chat["title"], export_meta), f"{curr_chat['title']}.html", "text/html", use_container_width=True)
 
-    # 🌟 优化：彻底释放视界，取消高度限制
-    # 聊天消息展示区直接去除了 height 参数，让界面能有多大就有多大
     with st.container(border=False):
         editing_idx = st.session_state.get("_editing_chat_idx")
         
@@ -418,12 +459,11 @@ if st.session_state.current_page == "💬 自由聊天区":
     need_resend = st.session_state.pop("_auto_resend", False)
     resume_idx = st.session_state.pop("_resume_idx", None)
     
-    # 🌟 优化：极简附件入口，悬浮于输入框左上角
-    c_plus, c_space = st.columns([1, 15])
-    with c_plus:
-        with st.popover("➕", help="随此条消息挂载附件"):
-            dyn_file = st.file_uploader("📎 上传单次文档", type=['txt', 'md', 'pdf', 'docx'], key="dyn_file")
-            is_continuous = st.checkbox("🔄 持续参考 (勾选后一直带入后续对话)", value=False)
+    # 🌟 痛点2解决：在此放置一个隐藏锚点，紧接着放置组件。CSS 会锁定它，让它悬浮在外部左下方！
+    st.markdown('<span id="attach-anchor-start"></span>', unsafe_allow_html=True)
+    with st.popover("📎 挂载附件"):
+        dyn_file = st.file_uploader("上传单次文档", type=['txt', 'md', 'pdf', 'docx'], key="dyn_file")
+        is_continuous = st.checkbox("🔄 持续参考 (一直带入后续对话)", value=False)
 
     prompt = st.chat_input("输入消息...")
 
@@ -488,7 +528,7 @@ if st.session_state.current_page == "💬 自由聊天区":
                 st.rerun()
 
 # ==========================================
-# 模块 2: 底层引擎配置 (安全排版)
+# 模块 2: 底层引擎配置
 # ==========================================
 elif st.session_state.current_page == "⚙️ 底层引擎配置":
     st.header("⚙️ 底层驱动配置")
