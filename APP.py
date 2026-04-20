@@ -49,11 +49,15 @@ if "initialized" not in st.session_state:
     st.session_state.ls_loaded = False
     st.session_state._needs_save = False
     st.session_state.is_streaming = False
+    st.session_state.ls_wait_count = 0  # 新增：等待计数器
 
 # 水合逻辑 (从 LocalStorage 读取)
 if not st.session_state.ls_loaded:
-    saved_data = localS.getItem("zenmux_data")
-    if saved_data is not None: # 组件已就绪
+    saved_data = localS.getItem("zenmux_data", key="ls_get")
+    st.session_state.ls_wait_count += 1
+    
+    # 修复核心：如果拿到了数据，或者已经等了1个周期（说明是新用户，本地没数据），就放行
+    if saved_data is not None or st.session_state.ls_wait_count > 1: 
         default_profiles = [{
             "name": "默认引擎", "base_url": "", "api_key": "", "model": "anthropic/claude-3-5-sonnet-20240620",
             "use_temperature": True, "temperature": 0.8, "use_max_tokens": True, "max_tokens": 4096,
@@ -83,7 +87,6 @@ if not st.session_state.ls_loaded:
     else:
         st.info("🔄 正在从本地安全存储加载数据，请稍候...")
         st.stop()
-
 # ==========================================
 # 3. 核心底层辅助函数
 # ==========================================
