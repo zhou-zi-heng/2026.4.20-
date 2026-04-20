@@ -7,22 +7,25 @@ from pypdf import PdfReader
 from streamlit_local_storage import LocalStorage
 
 # ==========================================
-# 1. 页面全局配置与极致 UI 优化
+# 1. 页面全局配置与精准 UI 优化
 # ==========================================
 st.set_page_config(page_title="ZenMux 创作者工作站", page_icon="🐙", layout="wide")
 st.markdown("""
     <style>
-    /* 1. 彻底隐藏右上角的 Github/Deploy/Toolbar 等一切遮挡物，保留左侧侧边栏按钮 */
-    .stAppDeployButton, .stDeployButton, [data-testid="stToolbar"] { display: none !important; }
+    /* 1. 精准隐藏右上角 Github 标志和部署按钮，绝不误伤左侧菜单键 */
+    [data-testid="stToolbar"], .stAppDeployButton { display: none !important; }
     
-    /* 2. 极致压缩顶边距，最大化聊天可视区域 */
-    .block-container { padding-top: 1rem !important; padding-bottom: 5rem !important; }
+    /* 2. 优化按钮圆角 */
+    .stButton>button { border-radius: 8px; transition: all 0.2s; }
     
-    /* 3. 优化按钮和输入框的圆角视觉 */
-    .stButton>button { border-radius: 8px; font-weight: bold; transition: all 0.2s; }
+    /* 3. 手机端与电脑端安全边距适配，保证汉堡菜单永远可见 */
+    .block-container { padding-top: 2rem !important; padding-bottom: 5rem !important; }
+    @media (max-width: 768px) {
+        .block-container { padding-top: 3.5rem !important; } /* 给手机顶部留出菜单键空间 */
+    }
     
-    /* 4. 让输入框上方的小加号与输入框贴合得更紧密 */
-    [data-testid="stPopover"] { margin-bottom: -15px; }
+    /* 4. 优化输入框上方的附件小加号 */
+    [data-testid="stPopover"] { margin-bottom: -15px; z-index: 10; }
     </style>
 """, unsafe_allow_html=True)
 
@@ -98,8 +101,7 @@ def clean_novel_text(text):
     text = re.sub(r'\n{3,}', '\n\n', text)
     return text.strip()
 
-def count_words(text):
-    return len(re.findall(r'[\u4e00-\u9fff]', text)) + len(re.findall(r'[a-zA-Z]+', text))
+def count_words(text): return len(re.findall(r'[\u4e00-\u9fff]', text)) + len(re.findall(r'[a-zA-Z]+', text))
 
 def extract_file_text(uploaded_file):
     name = uploaded_file.name.lower()
@@ -107,17 +109,15 @@ def extract_file_text(uploaded_file):
         if name.endswith('.pdf'): return "\n".join([page.extract_text() for page in PdfReader(uploaded_file).pages if page.extract_text()])
         elif name.endswith('.docx'): return "\n".join([p.text for p in Document(uploaded_file).paragraphs])
         else: return uploaded_file.getvalue().decode('utf-8', errors='ignore')
-    except Exception as e:
-        return f"文件解析失败: {str(e)}"
+    except Exception as e: return f"文件解析失败: {str(e)}"
 
 def generate_word_doc(messages, is_pure=False):
     doc = Document()
     doc.add_heading('ZenMux 导出文档', 0)
     for msg in messages:
         if msg["role"] == "system": continue
-        if is_pure:
-            if msg["role"] == "assistant": doc.add_paragraph(clean_novel_text(msg["content"]))
-        else:
+        if is_pure and msg["role"] == "assistant": doc.add_paragraph(clean_novel_text(msg["content"]))
+        elif not is_pure:
             doc.add_heading("📌 我" if msg["role"]=="user" else "🤖 AI", level=2)
             doc.add_paragraph(msg["content"])
     bio = io.BytesIO()
@@ -136,15 +136,7 @@ def export_to_pretty_html(messages, title, meta=None):
         if meta.get("system_prompt"): rows += f'<div class="info-row"><span class="info-label">🎭 人设</span></div><div class="info-value" style="background:#f8f8f8;padding:8px;border-radius:6px;font-size:12px;">{html.escape(meta["system_prompt"])}</div>'
         info_html = f'<div class="info-card" id="infoCard"><h3>⚙️ 配置信息</h3>{rows}</div>'
 
-    msg_html = ""
-    for m in messages:
-        if m["role"] == "system": continue
-        is_user = m["role"] == "user"
-        role_class = "user" if is_user else "ai"
-        avatar = "🙋‍♂️" if is_user else "🤖"
-        safe = html.escape(m["content"]).replace('\n', '<br>')
-        msg_html += f'<div class="msg {role_class}"><div class="avatar">{avatar}</div><div><div class="bubble">{safe}</div><div class="word-count">{count_words(m["content"])} 字</div></div></div>'
-
+    msg_html = "".join([f'<div class="msg {"user" if m["role"]=="user" else "ai"}"><div class="avatar">{"🙋‍♂️" if m["role"]=="user" else "🤖"}</div><div><div class="bubble">{html.escape(m["content"]).replace(chr(10), "<br>")}</div><div class="word-count">{count_words(m["content"])} 字</div></div></div>' for m in messages if m["role"]!="system"])
     date_str = datetime.now().strftime('%Y-%m-%d %H:%M')
     return f"<!DOCTYPE html><html lang='zh-CN'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>{title}</title><style>{css}</style></head><body><div class='header'><h1>💬 {title}</h1><div class='meta'>{date_str} <span style='text-decoration:underline;cursor:pointer;margin-left:10px' onclick='toggleInfo()'>显示/隐藏配置</span></div></div><div class='chat-container'>{info_html}{msg_html}</div>{js}</body></html>".encode('utf-8')
 
@@ -153,8 +145,7 @@ def fetch_models(base_url, api_key):
         url = (base_url.strip().rstrip('/') or "https://api.openai.com/v1") + "/models"
         resp = requests.get(url, headers={"Authorization": "Bearer " + api_key.strip()}, timeout=8)
         return (True, sorted([m["id"] for m in resp.json().get("data", [])])) if resp.status_code == 200 else (False, f"状态码 {resp.status_code}")
-    except Exception as e:
-        return False, str(e)
+    except Exception as e: return False, str(e)
 
 def get_client():
     p = st.session_state.profiles[st.session_state.active_profile_idx]
@@ -162,98 +153,69 @@ def get_client():
 
 def build_api_kwargs(profile, api_msgs):
     kw = {"model": profile["model"], "messages": api_msgs, "stream": True}
-    if profile.get("use_temperature", True): kw["temperature"] = profile.get("temperature", 0.8)
-    if profile.get("use_max_tokens", True): kw["max_tokens"] = profile.get("max_tokens", 4096)
-    if profile.get("use_top_p", False): kw["top_p"] = profile.get("top_p", 1.0)
-    if profile.get("use_frequency_penalty", False): kw["frequency_penalty"] = profile.get("frequency_penalty", 0.0)
+    for key in ["temperature", "max_tokens", "top_p", "frequency_penalty"]:
+        if profile.get(f"use_{key}", key in ["temperature", "max_tokens"]): kw[key] = profile.get(key)
     return kw
 
 # ==========================================
-# 4. 全局侧边栏导航
+# 4. 全局侧边栏 (控制台与历史管理)
 # ==========================================
 with st.sidebar:
-    st.header("控制中枢")
-    for pg in ["💬 自由聊天区", "⚙️ 底层引擎配置"]:
-        if st.button(pg, use_container_width=True, type="primary" if st.session_state.current_page == pg else "secondary"):
-            st.session_state.current_page = pg
-            st.rerun()
-            
+    st.title("🐙 ZenMux")
+    page = st.radio("导航", ["💬 自由聊天区", "⚙️ 底层引擎配置"], label_visibility="collapsed")
+    st.session_state.current_page = page
     active_p = st.session_state.profiles[st.session_state.active_profile_idx]
+    st.caption(f"🟢 当前引擎: {active_p['name']} | 🧠 {active_p['model']}")
     st.divider()
-    st.caption(f"🟢 **当前挂载**: {active_p['name']}\n🧠 **模型**: {active_p['model']}")
-    st.divider()
-    
-    with st.expander("📦 全量数据快照迁移", expanded=False):
-        full_data = json.dumps({"profiles": st.session_state.profiles, "free_chats": st.session_state.free_chats}, ensure_ascii=False, indent=2).encode('utf-8')
-        st.download_button("📥 导出全量快照", full_data, f"ZenMux_Backup_{datetime.now().strftime('%m%d_%H%M')}.json", "application/json", use_container_width=True, type="primary")
-        if uploaded_ws := st.file_uploader("📂 导入快照 (覆盖当前)", type="json"):
-            try:
-                data = json.loads(uploaded_ws.getvalue().decode('utf-8'))
-                st.session_state.profiles = data.get("profiles", st.session_state.profiles)
-                st.session_state.free_chats = data.get("free_chats", st.session_state.free_chats)
-                st.session_state.active_profile_idx = 0
-                st.session_state.current_chat_id = list(st.session_state.free_chats.keys())[-1]
-                trigger_save()
-                st.success("✅ 恢复成功！")
-                st.rerun()
-            except: st.error("导入失败")
 
-# ==========================================
-# 模块 1: 自由聊天区 (清爽全视界排版)
-# ==========================================
-if st.session_state.current_page == "💬 自由聊天区":
-    # 顶部侧边抽屉：历史对话管理
-    with st.expander("📚 切换历史对话", expanded=False):
-        c1, c2 = st.columns([1, 2])
-        if c1.button("➕ 新对话", use_container_width=True, type="primary"):
+    if page == "💬 自由聊天区":
+        # 当前会话指针防护
+        if st.session_state.current_chat_id not in st.session_state.free_chats:
+            st.session_state.current_chat_id = list(st.session_state.free_chats.keys())[-1]
+        curr_chat = st.session_state.free_chats[st.session_state.current_chat_id]
+
+        if st.button("➕ 新建对话", use_container_width=True, type="primary"):
             nid = str(uuid.uuid4())
             st.session_state.free_chats[nid] = {"title": "新对话", "messages": [], "session_knowledge": [], "system_prompt": "", "is_pinned": False, "is_archived": False}
             st.session_state.current_chat_id = nid
             trigger_save()
             st.rerun()
-        search_q = c2.text_input("🔍 搜索", label_visibility="collapsed", placeholder="搜索历史...")
 
-        chat_items = [(cid, cdata) for cid, cdata in st.session_state.free_chats.items() if not cdata.get("is_archived", False) and (not search_q or search_q.lower() in cdata["title"].lower())]
-        chat_items.sort(key=lambda x: x[1].get("is_pinned", False), reverse=True)
+        # 分组1：历史对话
+        with st.expander("📚 历史对话", expanded=True):
+            search_q = st.text_input("🔍 搜索", label_visibility="collapsed", placeholder="搜索历史...")
+            chat_items = [(cid, cdata) for cid, cdata in st.session_state.free_chats.items() if not cdata.get("is_archived", False) and (not search_q or search_q.lower() in cdata["title"].lower())]
+            chat_items.sort(key=lambda x: x[1].get("is_pinned", False), reverse=True)
 
-        for cid, cdata in chat_items:
-            prefix = "⭐ " if cid == st.session_state.current_chat_id else ("📌 " if cdata.get("is_pinned") else "📄 ")
-            if st.button(prefix + cdata["title"], key=f"sel_{cid}", use_container_width=True):
-                st.session_state.current_chat_id = cid
-                st.rerun()
-                
-        if st.button("🗄️ 归档区"):
-            st.session_state._show_archive = not st.session_state.get("_show_archive", False)
-            st.rerun()
-        if st.session_state.get("_show_archive", False):
-            for cid, cdata in st.session_state.free_chats.items():
-                if cdata.get("is_archived", False):
-                    cc1, cc2 = st.columns([3, 1])
-                    cc1.markdown(f"📦 {cdata['title']}")
-                    if cc2.button("恢复", key=f"unarch_{cid}"):
-                        cdata["is_archived"] = False
-                        trigger_save()
-                        st.rerun()
-
-    # 当前会话数据准备
-    if st.session_state.current_chat_id not in st.session_state.free_chats:
-        st.session_state.current_chat_id = list(st.session_state.free_chats.keys())[-1]
-    curr_chat = st.session_state.free_chats[st.session_state.current_chat_id]
-    
-    # 【UI优化点 1&2】：标题 + 万物归一的下拉菜单
-    tc1, tc2 = st.columns([8, 1]) # 标题占绝大部分，菜单占最右边小箭头
-    with tc1:
-        new_title = st.text_input("会话标题", curr_chat["title"], label_visibility="collapsed")
-        if new_title != curr_chat["title"]:
-            curr_chat["title"] = new_title
-            trigger_save()
-    with tc2:
-        with st.popover("🔽", use_container_width=True):
-            st.markdown("**⚙️ 全局设定与操作**")
+            for cid, cdata in chat_items:
+                prefix = "⭐ " if cid == st.session_state.current_chat_id else ("📌 " if cdata.get("is_pinned") else "📄 ")
+                if st.button(prefix + cdata["title"], key=f"sel_{cid}", use_container_width=True):
+                    st.session_state.current_chat_id = cid
+                    st.rerun()
             
-            # 全局人设与常驻知识库移入菜单
-            curr_chat["system_prompt"] = st.text_area("🎭 全局人设 (System Prompt)", curr_chat.get("system_prompt", ""), height=68)
-            up_f = st.file_uploader("📎 添加常驻知识库文件", type=['txt', 'md', 'pdf', 'docx'], key=f"kb_{st.session_state.current_chat_id}")
+            if st.button("🗄️ 归档区"):
+                st.session_state._show_archive = not st.session_state.get("_show_archive", False)
+                st.rerun()
+            if st.session_state.get("_show_archive", False):
+                for cid, cdata in st.session_state.free_chats.items():
+                    if cdata.get("is_archived", False):
+                        col1, col2 = st.columns([3, 1])
+                        col1.caption(f"📦 {cdata['title']}")
+                        if col2.button("恢复", key=f"unarch_{cid}"):
+                            cdata["is_archived"] = False
+                            trigger_save()
+                            st.rerun()
+
+        # 分组2：当前对话全局设定 (万物归一)
+        with st.expander("⚙️ 当前对话设定", expanded=False):
+            new_title = st.text_input("✏️ 重命名此对话", curr_chat["title"])
+            if new_title != curr_chat["title"]:
+                curr_chat["title"] = new_title
+                trigger_save()
+                
+            curr_chat["system_prompt"] = st.text_area("🎭 全局人设 (System Prompt)", curr_chat.get("system_prompt", ""), height=80)
+            
+            up_f = st.file_uploader("📎 添加常驻知识库", type=['txt', 'md', 'pdf', 'docx'], key=f"kb_{st.session_state.current_chat_id}")
             if up_f:
                 if not any(k["filename"] == up_f.name for k in curr_chat.get("session_knowledge", [])):
                     if "session_knowledge" not in curr_chat: curr_chat["session_knowledge"] = []
@@ -269,7 +231,6 @@ if st.session_state.current_page == "💬 自由聊天区":
                     st.rerun()
                     
             st.divider()
-            # 操作按钮集成
             if st.button("取消置顶" if curr_chat.get("is_pinned") else "📌 置顶此会话", use_container_width=True):
                 curr_chat["is_pinned"] = not curr_chat.get("is_pinned", False)
                 trigger_save()
@@ -286,6 +247,33 @@ if st.session_state.current_page == "💬 自由聊天区":
                 st.session_state._show_export = not st.session_state.get("_show_export", False)
                 st.rerun()
 
+        # 数据快照备份
+        st.divider()
+        with st.expander("📦 全量数据快照迁移", expanded=False):
+            full_data = json.dumps({"profiles": st.session_state.profiles, "free_chats": st.session_state.free_chats}, ensure_ascii=False, indent=2).encode('utf-8')
+            st.download_button("📥 导出全量快照", full_data, f"ZenMux_Backup_{datetime.now().strftime('%m%d_%H%M')}.json", "application/json", use_container_width=True, type="primary")
+            if uploaded_ws := st.file_uploader("📂 导入快照 (覆盖当前)", type="json"):
+                try:
+                    data = json.loads(uploaded_ws.getvalue().decode('utf-8'))
+                    st.session_state.profiles = data.get("profiles", st.session_state.profiles)
+                    st.session_state.free_chats = data.get("free_chats", st.session_state.free_chats)
+                    st.session_state.active_profile_idx = 0
+                    st.session_state.current_chat_id = list(st.session_state.free_chats.keys())[-1]
+                    trigger_save()
+                    st.success("✅ 恢复成功！")
+                    st.rerun()
+                except: st.error("导入失败")
+
+# ==========================================
+# 模块 1: 自由聊天区 (纯净右侧主战场)
+# ==========================================
+if st.session_state.current_page == "💬 自由聊天区":
+    curr_chat = st.session_state.free_chats[st.session_state.current_chat_id]
+    
+    # 顶部仅保留固定的标题
+    st.markdown(f"<h3 style='margin-top:-10px; padding-bottom:15px; border-bottom:1px solid #ddd;'>💬 {curr_chat['title']}</h3>", unsafe_allow_html=True)
+
+    # 导出面板（如果侧边栏点击了导出）
     if st.session_state.get("_show_export", False):
         with st.container(border=True):
             exp_mode = st.radio("导出格式", ["完整记录", "纯享正文"], horizontal=True, label_visibility="collapsed")
@@ -296,7 +284,7 @@ if st.session_state.current_page == "💬 自由聊天区":
             ec2.download_button("📥 Word", generate_word_doc(curr_chat["messages"], is_pure), f"{curr_chat['title']}.docx", use_container_width=True)
             ec3.download_button("🎨 HTML", export_to_pretty_html(curr_chat["messages"], curr_chat["title"], {"system_prompt": curr_chat.get("system_prompt", ""), "model": active_p["model"]}), f"{curr_chat['title']}.html", "text/html", use_container_width=True)
 
-    # 【UI优化点 3】：去掉高度限制，实现原生沉浸式全屏滚动
+    # 无限向下滚动的聊天区域
     with st.container(border=False):
         editing_idx = st.session_state.get("_editing_chat_idx")
         for i, msg in enumerate(curr_chat["messages"]):
@@ -304,8 +292,7 @@ if st.session_state.current_page == "💬 自由聊天区":
             
             with st.chat_message(msg["role"]):
                 if msg.get("files"):
-                    for f in msg["files"]:
-                        st.caption(f"`{'🔄' if f.get('continuous') else '1️⃣'} 附件: {f['filename']}`")
+                    for f in msg["files"]: st.caption(f"`{'🔄' if f.get('continuous') else '1️⃣'} 附件: {f['filename']}`")
                         
                 if msg["role"] == "user" and editing_idx == i:
                     new_text = st.text_area("✏️ 编辑", msg["content"], key=f"edit_area_{i}", height=100)
@@ -322,9 +309,8 @@ if st.session_state.current_page == "💬 自由聊天区":
                         st.rerun()
                 else:
                     st.markdown(msg["content"])
-                    
                     if msg["role"] == "user" and editing_idx is None:
-                        with st.popover("⚙️ 操作"):
+                        with st.popover("⚙️"):
                             if st.button("✏️ 编辑", key=f"edit_btn_{i}"):
                                 st.session_state._editing_chat_idx = i
                                 st.rerun()
@@ -333,7 +319,7 @@ if st.session_state.current_page == "💬 自由聊天区":
                                 trigger_save()
                                 st.rerun()
                     elif msg["role"] == "assistant":
-                        with st.popover("⚙️ 操作"):
+                        with st.popover("⚙️"):
                             if st.button("🔄 重新生成", key=f"regen_{i}"):
                                 curr_chat["messages"] = curr_chat["messages"][:i]
                                 st.session_state._auto_resend = True
@@ -349,13 +335,13 @@ if st.session_state.current_page == "💬 自由聊天区":
                                 st.rerun()
                         st.caption(f"📊 {count_words(msg['content'])} 字")
 
-    # 【UI优化点 4】：左下角悬浮的小加号
     need_resend = st.session_state.pop("_auto_resend", False)
     resume_idx = st.session_state.pop("_resume_idx", None)
     
-    with st.popover("➕ 附件"):
+    # 底部输入框与附件按钮
+    with st.popover("➕"):
         dyn_file = st.file_uploader("跟随消息发送附件", type=['txt', 'md', 'pdf', 'docx'], key="dyn_file")
-        is_continuous = st.checkbox("🔄 持续参考 (之后每次对话都会带上它)", value=False)
+        is_continuous = st.checkbox("🔄 持续参考 (勾选后后续对话一直生效)", value=False)
 
     prompt = st.chat_input("输入消息...")
 
