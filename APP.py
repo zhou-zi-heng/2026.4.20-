@@ -7,25 +7,63 @@ from pypdf import PdfReader
 from streamlit_local_storage import LocalStorage
 
 # ==========================================
-# 1. 页面全局配置与精准 UI 优化
+# 1. 页面全局配置与全平台兼容极简 UI
 # ==========================================
 st.set_page_config(page_title="ZenMux 创作者工作站", page_icon="🐙", layout="wide")
 st.markdown("""
     <style>
-    /* 1. 精准隐藏右上角 Github 标志和部署按钮，绝不误伤左侧菜单键 */
-    [data-testid="stToolbar"], .stAppDeployButton { display: none !important; }
-    
-    /* 2. 优化按钮圆角 */
-    .stButton>button { border-radius: 8px; transition: all 0.2s; }
-    
-    /* 3. 手机端与电脑端安全边距适配，保证汉堡菜单永远可见 */
-    .block-container { padding-top: 2rem !important; padding-bottom: 5rem !important; }
-    @media (max-width: 768px) {
-        .block-container { padding-top: 3.5rem !important; } /* 给手机顶部留出菜单键空间 */
+    /* 1. 终极解决左侧栏按钮消失问题：
+       精准点杀部署按钮和右侧工具栏，绝对保留左侧控制台按钮！*/
+    header[data-testid="stHeader"] .stAppDeployButton,
+    header[data-testid="stHeader"] [data-testid="stToolbar"] {
+        display: none !important;
+        visibility: hidden !important;
     }
-    
-    /* 4. 优化输入框上方的附件小加号 */
-    [data-testid="stPopover"] { margin-bottom: -15px; z-index: 10; }
+
+    /* 强制保护侧边栏展开按钮（无论手机的☰还是电脑的>），置顶显示绝不被挡 */
+    [data-testid="collapsedControl"] {
+        display: flex !important;
+        visibility: visible !important;
+        z-index: 999999 !important; 
+    }
+
+    /* 2. 优化页面边距，恢复安全的顶部距离防止标题被系统栏吃掉 */
+    .block-container { 
+        padding-top: 4rem !important; 
+        padding-bottom: 6rem !important; /* 给底部的悬浮组件留出空间 */
+    }
+
+    /* 3. 终极兼容版：附件悬浮按钮 (兼容所有老旧手机浏览器)
+       放弃高阶的锚点语法，直接锁定页面中最后一个 Popover 元素（即我们的附件按钮）*/
+    div.stMain div[data-testid="stPopover"]:last-of-type {
+        position: fixed !important;
+        bottom: 95px !important;  /* 悬停在电脑端聊天输入框的左上方 */
+        left: 5rem !important;    /* 避开左侧边栏展开时的空间 */
+        z-index: 99999 !important;
+    }
+
+    /* 美化附件按钮的本体，让它看起来像一个独立的轻量级胶囊 */
+    div.stMain div[data-testid="stPopover"]:last-of-type button {
+        background-color: #ffffff !important;
+        border: 1px solid #d1d5db !important;
+        border-radius: 20px !important;
+        padding: 4px 16px !important;
+        box-shadow: 0 4px 10px rgba(0,0,0,0.08) !important;
+        color: #374151 !important;
+        font-weight: normal !important;
+    }
+    div.stMain div[data-testid="stPopover"]:last-of-type button:hover {
+        border-color: #667eea !important;
+        color: #667eea !important;
+    }
+
+    /* 手机端专门适配悬浮按钮的位置 */
+    @media (max-width: 768px) {
+        div.stMain div[data-testid="stPopover"]:last-of-type {
+            bottom: 82px !important;  /* 手机端输入框较窄，下压一点 */
+            left: 1rem !important;    /* 紧贴屏幕左侧边缘 */
+        }
+    }
     </style>
 """, unsafe_allow_html=True)
 
@@ -142,14 +180,14 @@ def export_to_pretty_html(messages, title, meta=None):
 
 def fetch_models(base_url, api_key):
     try:
-        url = (base_url.strip().rstrip('/') or "https://api.openai.com/v1") + "/models"
+        url = (base_url.strip().rstrip('/') or "[https://api.openai.com/v1](https://api.openai.com/v1)") + "/models"
         resp = requests.get(url, headers={"Authorization": "Bearer " + api_key.strip()}, timeout=8)
         return (True, sorted([m["id"] for m in resp.json().get("data", [])])) if resp.status_code == 200 else (False, f"状态码 {resp.status_code}")
     except Exception as e: return False, str(e)
 
 def get_client():
     p = st.session_state.profiles[st.session_state.active_profile_idx]
-    return OpenAI(base_url=p["base_url"].strip() or "https://api.openai.com/v1", api_key=p["api_key"].strip()), p
+    return OpenAI(base_url=p["base_url"].strip() or "[https://api.openai.com/v1](https://api.openai.com/v1)", api_key=p["api_key"].strip()), p
 
 def build_api_kwargs(profile, api_msgs):
     kw = {"model": profile["model"], "messages": api_msgs, "stream": True}
@@ -206,7 +244,7 @@ with st.sidebar:
                             trigger_save()
                             st.rerun()
 
-        # 分组2：当前对话全局设定 (万物归一)
+        # 分组2：当前对话全局设定
         with st.expander("⚙️ 当前对话设定", expanded=False):
             new_title = st.text_input("✏️ 重命名此对话", curr_chat["title"])
             if new_title != curr_chat["title"]:
@@ -273,7 +311,7 @@ if st.session_state.current_page == "💬 自由聊天区":
     # 顶部仅保留固定的标题
     st.markdown(f"<h3 style='margin-top:-10px; padding-bottom:15px; border-bottom:1px solid #ddd;'>💬 {curr_chat['title']}</h3>", unsafe_allow_html=True)
 
-    # 导出面板（如果侧边栏点击了导出）
+    # 导出面板
     if st.session_state.get("_show_export", False):
         with st.container(border=True):
             exp_mode = st.radio("导出格式", ["完整记录", "纯享正文"], horizontal=True, label_visibility="collapsed")
@@ -338,10 +376,10 @@ if st.session_state.current_page == "💬 自由聊天区":
     need_resend = st.session_state.pop("_auto_resend", False)
     resume_idx = st.session_state.pop("_resume_idx", None)
     
-    # 底部输入框与附件按钮
-    with st.popover("➕"):
-        dyn_file = st.file_uploader("跟随消息发送附件", type=['txt', 'md', 'pdf', 'docx'], key="dyn_file")
-        is_continuous = st.checkbox("🔄 持续参考 (勾选后后续对话一直生效)", value=False)
+    # 底部输入框与强行悬浮在外部的附件按钮
+    with st.popover("📎 添加附件"):
+        dyn_file = st.file_uploader("跟随消息发送单次文件", type=['txt', 'md', 'pdf', 'docx'], key="dyn_file")
+        is_continuous = st.checkbox("🔄 持续参考 (勾选后对后续对话一直生效)", value=False)
 
     prompt = st.chat_input("输入消息...")
 
@@ -437,7 +475,7 @@ elif st.session_state.current_page == "⚙️ 底层引擎配置":
     if p["api_key"] and st.button("🔑 测试连通性"):
         with st.spinner("测试中..."):
             try:
-                OpenAI(base_url=p["base_url"].strip() or "https://api.openai.com/v1", api_key=p["api_key"].strip()).chat.completions.create(model=p["model"], messages=[{"role": "user", "content": "Hi"}], max_tokens=5)
+                OpenAI(base_url=p["base_url"].strip() or "[https://api.openai.com/v1](https://api.openai.com/v1)", api_key=p["api_key"].strip()).chat.completions.create(model=p["model"], messages=[{"role": "user", "content": "Hi"}], max_tokens=5)
                 st.success("✅ 连通成功！")
             except Exception as e: st.error(f"❌ 失败: {str(e)}")
 
