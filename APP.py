@@ -20,6 +20,9 @@ st.markdown("""
     @media (max-width: 768px) {
         .block-container { padding-top: 1rem; padding-bottom: 5rem; }
     }
+    /* 弱化小加号按钮的边框，使其更隐形 */
+    [data-testid="stPopover"] > button { border-color: transparent; background: transparent; box-shadow: none; padding: 0.5rem; font-size: 1.2rem; }
+    [data-testid="stPopover"] > button:hover { border-color: #e0e0e0; background: #f8f9fa; }
     </style>
 """, unsafe_allow_html=True)
 
@@ -64,7 +67,6 @@ if not st.session_state.ls_loaded:
         except Exception:
             pass
             
-    # 如果数据没拿到，只等待 1 次（约0.8秒），超时立刻放行，绝不卡死
     if saved_data in [None, "", "null"] and st.session_state.ls_wait_count < 1:
         st.session_state.ls_wait_count += 1
         st.info("🔄 正在安全环境中初始化您的专属工作站，请稍候...")
@@ -193,7 +195,7 @@ def export_to_pretty_html(messages, title, meta=None):
 
 def fetch_models(base_url, api_key):
     try:
-        url = (base_url.strip().rstrip('/') or "https://api.openai.com/v1") + "/models"
+        url = (base_url.strip().rstrip('/') or "[https://api.openai.com/v1](https://api.openai.com/v1)") + "/models"
         resp = requests.get(url, headers={"Authorization": "Bearer " + api_key.strip()}, timeout=8)
         if resp.status_code == 200:
             return True, sorted([m["id"] for m in resp.json().get("data", [])])
@@ -203,7 +205,7 @@ def fetch_models(base_url, api_key):
 
 def get_client():
     p = st.session_state.profiles[st.session_state.active_profile_idx]
-    url = p["base_url"].strip() or "https://api.openai.com/v1"
+    url = p["base_url"].strip() or "[https://api.openai.com/v1](https://api.openai.com/v1)"
     return OpenAI(base_url=url, api_key=p["api_key"].strip()), p
 
 def build_api_kwargs(profile, api_msgs):
@@ -296,30 +298,52 @@ if st.session_state.current_page == "💬 自由聊天区":
         st.session_state.current_chat_id = list(st.session_state.free_chats.keys())[-1]
     curr_chat = st.session_state.free_chats[st.session_state.current_chat_id]
     
-    # 标题与操作栏 (手机级安全折叠菜单)
-    tc1, tc2 = st.columns([3, 1])
+    # 🌟 优化：标题与终极聚合操作菜单
+    tc1, tc2 = st.columns([15, 1]) # 让标题框无限拉伸，菜单极致浓缩
     with tc1:
         new_title = st.text_input("会话标题", curr_chat["title"], label_visibility="collapsed")
         if new_title != curr_chat["title"]:
             curr_chat["title"] = new_title
             trigger_save()
     with tc2:
-        with st.popover("⚙️ 菜单", use_container_width=True):
-            if st.button("取消置顶" if curr_chat.get("is_pinned") else "📌 置顶", use_container_width=True):
+        with st.popover("🔽", use_container_width=True):
+            st.markdown("##### ⚙️ 会话管理")
+            btn_c1, btn_c2 = st.columns(2)
+            if btn_c1.button("取消置顶" if curr_chat.get("is_pinned") else "📌 置顶", use_container_width=True):
                 curr_chat["is_pinned"] = not curr_chat.get("is_pinned", False)
                 trigger_save()
                 st.rerun()
-            if st.button("📦 归档", use_container_width=True):
+            if btn_c2.button("📦 归档", use_container_width=True):
                 curr_chat["is_archived"] = True
                 trigger_save()
                 st.rerun()
-            if st.button("🗑️ 清空", use_container_width=True):
+            if btn_c1.button("🗑️ 清空", use_container_width=True):
                 curr_chat["messages"] = []
                 trigger_save()
                 st.rerun()
-            if st.button("📥 导出", use_container_width=True):
+            if btn_c2.button("📥 导出", use_container_width=True):
                 st.session_state._show_export = not st.session_state.get("_show_export", False)
                 st.rerun()
+                
+            st.divider()
+            
+            st.markdown("##### 📚 全局设定与知识库")
+            curr_chat["system_prompt"] = st.text_area("🎭 System Prompt", curr_chat.get("system_prompt", ""), height=80, placeholder="设定此会话专属的全局人设...")
+            up_f = st.file_uploader("📎 上传常驻参考文件", type=['txt', 'md', 'pdf', 'docx'], key=f"kb_{st.session_state.current_chat_id}")
+            if up_f:
+                content = extract_file_text(up_f)
+                if not any(k["filename"] == up_f.name for k in curr_chat.get("session_knowledge", [])):
+                    if "session_knowledge" not in curr_chat: curr_chat["session_knowledge"] = []
+                    curr_chat["session_knowledge"].append({"filename": up_f.name, "content": content})
+                    trigger_save()
+                    st.rerun()
+            for ki, k in enumerate(curr_chat.get("session_knowledge", [])):
+                kc1, kc2 = st.columns([4, 1])
+                kc1.caption(f"📄 {k['filename']} ({count_words(k['content']):,} 字)")
+                if kc2.button("❌", key=f"rm_kb_{ki}"):
+                    curr_chat["session_knowledge"].pop(ki)
+                    trigger_save()
+                    st.rerun()
 
     if st.session_state.get("_show_export", False):
         with st.container(border=True):
@@ -334,27 +358,9 @@ if st.session_state.current_page == "💬 自由聊天区":
             export_meta = {"system_prompt": curr_chat.get("system_prompt", ""), "model": active_p["model"]}
             st.download_button("🎨 下载 HTML", export_to_pretty_html(curr_msgs, curr_chat["title"], export_meta), f"{curr_chat['title']}.html", "text/html", use_container_width=True)
 
-    # --- 对话设置区 ---
-    with st.expander("⚙️ 全局设定与常驻知识库", expanded=bool(curr_chat.get("session_knowledge") or curr_chat.get("system_prompt"))):
-        curr_chat["system_prompt"] = st.text_area("🎭 System Prompt (全局人设)", curr_chat.get("system_prompt", ""), height=80)
-        up_f = st.file_uploader("📎 上传常驻参考文件", type=['txt', 'md', 'pdf', 'docx'], key=f"kb_{st.session_state.current_chat_id}")
-        if up_f:
-            content = extract_file_text(up_f)
-            if not any(k["filename"] == up_f.name for k in curr_chat.get("session_knowledge", [])):
-                if "session_knowledge" not in curr_chat: curr_chat["session_knowledge"] = []
-                curr_chat["session_knowledge"].append({"filename": up_f.name, "content": content})
-                trigger_save()
-                st.rerun()
-        for ki, k in enumerate(curr_chat.get("session_knowledge", [])):
-            kc1, kc2 = st.columns([4, 1])
-            kc1.caption(f"📄 {k['filename']} ({count_words(k['content']):,} 字)")
-            if kc2.button("❌", key=f"rm_kb_{ki}"):
-                curr_chat["session_knowledge"].pop(ki)
-                trigger_save()
-                st.rerun()
-
-    # --- 聊天消息展示 (安全折叠菜单) ---
-    with st.container(height=550, border=False):
+    # 🌟 优化：彻底释放视界，取消高度限制
+    # 聊天消息展示区直接去除了 height 参数，让界面能有多大就有多大
+    with st.container(border=False):
         editing_idx = st.session_state.get("_editing_chat_idx")
         
         for i, msg in enumerate(curr_chat["messages"]):
@@ -381,7 +387,6 @@ if st.session_state.current_page == "💬 自由聊天区":
                 else:
                     st.markdown(msg["content"])
                     
-                    # 移动端终极防崩溃：消息操作全部缩进 Popover
                     if msg["role"] == "user" and editing_idx is None:
                         with st.popover("⚙️ 操作"):
                             if st.button("✏️ 编辑", key=f"edit_btn_{i}"):
@@ -413,9 +418,12 @@ if st.session_state.current_page == "💬 自由聊天区":
     need_resend = st.session_state.pop("_auto_resend", False)
     resume_idx = st.session_state.pop("_resume_idx", None)
     
-    with st.expander("📎 随消息挂载附件", expanded=False):
-        dyn_file = st.file_uploader("上传文件", type=['txt', 'md', 'pdf', 'docx'], key="dyn_file")
-        is_continuous = st.checkbox("🔄 持续参考 (勾选后一直带入后续对话)", value=False)
+    # 🌟 优化：极简附件入口，悬浮于输入框左上角
+    c_plus, c_space = st.columns([1, 15])
+    with c_plus:
+        with st.popover("➕", help="随此条消息挂载附件"):
+            dyn_file = st.file_uploader("📎 上传单次文档", type=['txt', 'md', 'pdf', 'docx'], key="dyn_file")
+            is_continuous = st.checkbox("🔄 持续参考 (勾选后一直带入后续对话)", value=False)
 
     prompt = st.chat_input("输入消息...")
 
@@ -514,7 +522,7 @@ elif st.session_state.current_page == "⚙️ 底层引擎配置":
     if p["api_key"] and st.button("🔑 测试连通性"):
         with st.spinner("测试中..."):
             try:
-                OpenAI(base_url=p["base_url"].strip() or "https://api.openai.com/v1", api_key=p["api_key"].strip()).chat.completions.create(model=p["model"], messages=[{"role": "user", "content": "Hi"}], max_tokens=5)
+                OpenAI(base_url=p["base_url"].strip() or "[https://api.openai.com/v1](https://api.openai.com/v1)", api_key=p["api_key"].strip()).chat.completions.create(model=p["model"], messages=[{"role": "user", "content": "Hi"}], max_tokens=5)
                 st.success("✅ 连通成功！")
             except Exception as e:
                 st.error(f"❌ 失败: {str(e)}")
