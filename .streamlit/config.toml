@@ -1,7 +1,15 @@
 [server]
-maxUploadSize = 10
-enableXsrfProtection = true
+# 放宽文件大小限制到 50MB
+maxUploadSize = 50
+
+# 核心修复：关闭移动端经常误拦截的跨站保护
+enableXsrfProtection = false
+
+# 允许跨域，防止手机浏览器报错
 enableCORS = false
+
+# 开启文件上传支持
+enableWebsocketCompression = false
 
 [theme]
 primaryColor = "#667eea"
