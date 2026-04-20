@@ -1,6 +1,6 @@
-streamlit>=1.32.0
-openai>=1.14.0
-python-docx>=1.1.0
-pypdf>=4.1.0
-requests>=2.31.0
-streamlit-local-storage>=1.0.0
+streamlit
+openai
+python-docx
+pypdf
+requests
+streamlit-local-storage
