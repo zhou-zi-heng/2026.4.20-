@@ -12,70 +12,98 @@ from streamlit_local_storage import LocalStorage
 st.set_page_config(page_title="ZenMux 创作者工作站", page_icon="🐙", layout="wide")
 st.markdown("""
     <style>
-    /* 1. 释放顶部，转而精准隐藏右下角/输入框下方多余的图标 (Deploy / Status 等) */
-    .stAppDeployButton,
+    /* 1. 毁灭级封杀：彻底清除右下角/右上角所有 Streamlit 官方水印、Manage App 和部署按钮 */
+    [data-testid="stDeployButton"],
+    .stDeployButton,
+    header .stAppDeployButton,
+    [class*="viewerBadge"],
     [data-testid="stStatusWidget"],
-    .viewerBadge_container__1QSob,
-    .styles_viewerBadge__1yB5_ {
+    #Manage-app {
         display: none !important;
         visibility: hidden !important;
+        opacity: 0 !important;
+        width: 0 !important;
+        height: 0 !important;
+        pointer-events: none !important;
+        position: absolute !important;
+        z-index: -999 !important;
     }
 
-    /* 强制保护侧边栏展开按钮 */
+    /* 强制保护左侧边栏的展开汉堡按钮 */
     [data-testid="collapsedControl"] {
         display: flex !important;
         visibility: visible !important;
         z-index: 999999 !important; 
     }
 
-    /* 2. 将包含对话标题和设置的行固定在顶部，不随消息滚动，并把上下宽度压缩到极窄 */
+    /* 2. 纯比例自适应吸顶标题栏 - 终极压缩宽高度 */
     div[data-testid="stHorizontalBlock"]:has(#sticky-header) {
         position: sticky !important;
-        top: 3.5rem !important; /* 电脑端顶部安全距离，避免被默认 Header 盖住 */
+        top: 3.5rem !important; /* 电脑端顶部安全距离 */
         z-index: 990 !important;
-        background-color: var(--background-color, #ffffff) !important; /* 自动适配深色/浅色模式 */
-        padding-bottom: 0px !important;
-        padding-top: 5px !important;
-        margin-top: -15px !important;
+        background-color: var(--background-color, #ffffff) !important;
+        /* 彻底抛弃 px，改用 vh (视口高度比例) 和 vw (视口宽度比例) */
+        padding: 0.8vh 2vw !important; 
+        margin-top: -1.5vh !important;
         border-bottom: 1px solid #e5e7eb !important;
         align-items: center !important;
+        min-height: 0 !important; /* 斩断框架自带的撑高 */
     }
     
-    /* 手机端吸顶距离微调 */
     @media (max-width: 768px) {
         div[data-testid="stHorizontalBlock"]:has(#sticky-header) {
-            top: 3.2rem !important;
+            top: 2.8rem !important; /* 手机端紧凑一点 */
+            padding: 0.5vh 1vw !important;
         }
     }
     
-    /* 极致压缩标题输入框的上下边距，让它变成纯粹的文字感觉 */
-    div[data-testid="stHorizontalBlock"]:has(#sticky-header) .stTextInput div[data-baseweb="input"] {
+    /* 暴力剥离 TextInput 内部所有的默认撑起高度、边距和背景 */
+    div[data-testid="stHorizontalBlock"]:has(#sticky-header) [data-testid="stTextInput"] {
+        margin: 0 !important;
+        padding: 0 !important;
+    }
+    div[data-testid="stHorizontalBlock"]:has(#sticky-header) div[data-baseweb="input"] {
         background-color: transparent !important;
         border: none !important;
         box-shadow: none !important;
+        min-height: 0 !important; /* 致命一击，取消原生输入框高度 */
+        padding: 0 !important;
+        margin: 0 !important;
     }
     div[data-testid="stHorizontalBlock"]:has(#sticky-header) input {
-        font-size: 1.3rem !important;
+        /* clamp 函数：最小 1rem，最佳 4vw (随屏幕比例变动)，最大 1.2rem */
+        font-size: clamp(1rem, 4vw, 1.2rem) !important; 
+        line-height: 1 !important;
         font-weight: bold !important;
         padding: 0 !important;
-        margin-bottom: -5px !important;
+        margin: 0 !important;
+        height: auto !important;
         color: var(--text-color, #1f2937) !important;
     }
     
-    /* 右侧小箭头按钮极简压缩 */
-    div[data-testid="stHorizontalBlock"]:has(#sticky-header) button {
+    /* 极致压缩 Popover 箭头按钮的边距 */
+    div[data-testid="stHorizontalBlock"]:has(#sticky-header) [data-testid="stPopover"] {
+        margin: 0 !important;
+        padding: 0 !important;
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+    }
+    div[data-testid="stHorizontalBlock"]:has(#sticky-header) [data-testid="stPopover"] > button {
         background: transparent !important;
         border: none !important;
         box-shadow: none !important;
         padding: 0 !important;
+        margin: 0 !important;
         height: auto !important;
-        font-size: 1.5rem !important;
+        line-height: 1 !important;
+        /* 箭头大小同样随屏幕比例缩放 */
+        font-size: clamp(1.2rem, 5vw, 1.4rem) !important;
         color: #9ca3af !important;
         display: flex !important;
         justify-content: flex-end !important;
-        margin-bottom: -5px !important;
     }
-    div[data-testid="stHorizontalBlock"]:has(#sticky-header) button:hover {
+    div[data-testid="stHorizontalBlock"]:has(#sticky-header) [data-testid="stPopover"] > button:hover {
         color: #667eea !important;
     }
 
@@ -315,7 +343,7 @@ with st.sidebar:
 if st.session_state.current_page == "💬 自由聊天区":
     curr_chat = st.session_state.free_chats[st.session_state.current_chat_id]
     
-    # --- 核心修改：顶部吸顶极简操作栏 ---
+    # --- 核心修改：高度压缩、比例自适应的吸顶操作栏 ---
     tc1, tc2 = st.columns([15, 1]) 
     with tc1:
         st.markdown('<span id="sticky-header"></span>', unsafe_allow_html=True)
@@ -324,7 +352,7 @@ if st.session_state.current_page == "💬 自由聊天区":
             curr_chat["title"] = new_title
             trigger_save()
     with tc2:
-        with st.popover("🔽", use_container_width=True):
+        with st.popover("🔽"):
             st.markdown("##### ⚙️ 会话管理")
             btn_c1, btn_c2 = st.columns(2)
             if btn_c1.button("取消置顶" if curr_chat.get("is_pinned") else "📌 置顶", use_container_width=True):
