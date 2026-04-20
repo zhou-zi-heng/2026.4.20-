@@ -53,7 +53,7 @@ if "initialized" not in st.session_state:
 
 # 水合逻辑 (从 LocalStorage 读取)
 if not st.session_state.ls_loaded:
-    saved_data = localS.getItem("zenmux_data", key="ls_get")
+    saved_data = localS.getItem("zenmux_data")
     st.session_state.ls_wait_count += 1
     
     # 如果拿到了数据，或者已经等了1个周期（说明是新用户，本地没数据），就放行
