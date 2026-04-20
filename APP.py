@@ -12,37 +12,86 @@ from streamlit_local_storage import LocalStorage
 st.set_page_config(page_title="ZenMux 创作者工作站", page_icon="🐙", layout="wide")
 st.markdown("""
     <style>
-    /* 1. 终极解决左侧栏按钮消失问题：
-       精准点杀部署按钮和右侧工具栏，绝对保留左侧控制台按钮！*/
-    header[data-testid="stHeader"] .stAppDeployButton,
-    header[data-testid="stHeader"] [data-testid="stToolbar"] {
+    /* 1. 释放顶部，转而精准隐藏右下角/输入框下方多余的图标 (Deploy / Status 等) */
+    .stAppDeployButton,
+    [data-testid="stStatusWidget"],
+    .viewerBadge_container__1QSob,
+    .styles_viewerBadge__1yB5_ {
         display: none !important;
         visibility: hidden !important;
     }
 
-    /* 强制保护侧边栏展开按钮（无论手机的☰还是电脑的>），置顶显示绝不被挡 */
+    /* 强制保护侧边栏展开按钮 */
     [data-testid="collapsedControl"] {
         display: flex !important;
         visibility: visible !important;
         z-index: 999999 !important; 
     }
 
-    /* 2. 优化页面边距，恢复安全的顶部距离防止标题被系统栏吃掉 */
-    .block-container { 
-        padding-top: 4rem !important; 
-        padding-bottom: 6rem !important; /* 给底部的悬浮组件留出空间 */
+    /* 2. 将包含对话标题和设置的行固定在顶部，不随消息滚动，并把上下宽度压缩到极窄 */
+    div[data-testid="stHorizontalBlock"]:has(#sticky-header) {
+        position: sticky !important;
+        top: 3.5rem !important; /* 电脑端顶部安全距离，避免被默认 Header 盖住 */
+        z-index: 990 !important;
+        background-color: var(--background-color, #ffffff) !important; /* 自动适配深色/浅色模式 */
+        padding-bottom: 0px !important;
+        padding-top: 5px !important;
+        margin-top: -15px !important;
+        border-bottom: 1px solid #e5e7eb !important;
+        align-items: center !important;
+    }
+    
+    /* 手机端吸顶距离微调 */
+    @media (max-width: 768px) {
+        div[data-testid="stHorizontalBlock"]:has(#sticky-header) {
+            top: 3.2rem !important;
+        }
+    }
+    
+    /* 极致压缩标题输入框的上下边距，让它变成纯粹的文字感觉 */
+    div[data-testid="stHorizontalBlock"]:has(#sticky-header) .stTextInput div[data-baseweb="input"] {
+        background-color: transparent !important;
+        border: none !important;
+        box-shadow: none !important;
+    }
+    div[data-testid="stHorizontalBlock"]:has(#sticky-header) input {
+        font-size: 1.3rem !important;
+        font-weight: bold !important;
+        padding: 0 !important;
+        margin-bottom: -5px !important;
+        color: var(--text-color, #1f2937) !important;
+    }
+    
+    /* 右侧小箭头按钮极简压缩 */
+    div[data-testid="stHorizontalBlock"]:has(#sticky-header) button {
+        background: transparent !important;
+        border: none !important;
+        box-shadow: none !important;
+        padding: 0 !important;
+        height: auto !important;
+        font-size: 1.5rem !important;
+        color: #9ca3af !important;
+        display: flex !important;
+        justify-content: flex-end !important;
+        margin-bottom: -5px !important;
+    }
+    div[data-testid="stHorizontalBlock"]:has(#sticky-header) button:hover {
+        color: #667eea !important;
     }
 
-    /* 3. 终极兼容版：附件悬浮按钮 (兼容所有老旧手机浏览器)
-       放弃高阶的锚点语法，直接锁定页面中最后一个 Popover 元素（即我们的附件按钮）*/
+    /* 3. 页面边距与悬浮附件按钮 */
+    .block-container { 
+        padding-top: 3.5rem !important; 
+        padding-bottom: 6rem !important; 
+    }
+
     div.stMain div[data-testid="stPopover"]:last-of-type {
         position: fixed !important;
-        bottom: 95px !important;  /* 悬停在电脑端聊天输入框的左上方 */
-        left: 5rem !important;    /* 避开左侧边栏展开时的空间 */
+        bottom: 95px !important;  
+        left: 5rem !important;    
         z-index: 99999 !important;
     }
 
-    /* 美化附件按钮的本体，让它看起来像一个独立的轻量级胶囊 */
     div.stMain div[data-testid="stPopover"]:last-of-type button {
         background-color: #ffffff !important;
         border: 1px solid #d1d5db !important;
@@ -57,11 +106,10 @@ st.markdown("""
         color: #667eea !important;
     }
 
-    /* 手机端专门适配悬浮按钮的位置 */
     @media (max-width: 768px) {
         div.stMain div[data-testid="stPopover"]:last-of-type {
-            bottom: 82px !important;  /* 手机端输入框较窄，下压一点 */
-            left: 1rem !important;    /* 紧贴屏幕左侧边缘 */
+            bottom: 82px !important;  
+            left: 1rem !important;    
         }
     }
     </style>
@@ -244,47 +292,6 @@ with st.sidebar:
                             trigger_save()
                             st.rerun()
 
-        # 分组2：当前对话全局设定
-        with st.expander("⚙️ 当前对话设定", expanded=False):
-            new_title = st.text_input("✏️ 重命名此对话", curr_chat["title"])
-            if new_title != curr_chat["title"]:
-                curr_chat["title"] = new_title
-                trigger_save()
-                
-            curr_chat["system_prompt"] = st.text_area("🎭 全局人设 (System Prompt)", curr_chat.get("system_prompt", ""), height=80)
-            
-            up_f = st.file_uploader("📎 添加常驻知识库", type=['txt', 'md', 'pdf', 'docx'], key=f"kb_{st.session_state.current_chat_id}")
-            if up_f:
-                if not any(k["filename"] == up_f.name for k in curr_chat.get("session_knowledge", [])):
-                    if "session_knowledge" not in curr_chat: curr_chat["session_knowledge"] = []
-                    curr_chat["session_knowledge"].append({"filename": up_f.name, "content": extract_file_text(up_f)})
-                    trigger_save()
-                    st.rerun()
-            for ki, k in enumerate(curr_chat.get("session_knowledge", [])):
-                k1, k2 = st.columns([4, 1])
-                k1.caption(f"📄 {k['filename']}")
-                if k2.button("❌", key=f"rm_kb_{ki}"):
-                    curr_chat["session_knowledge"].pop(ki)
-                    trigger_save()
-                    st.rerun()
-                    
-            st.divider()
-            if st.button("取消置顶" if curr_chat.get("is_pinned") else "📌 置顶此会话", use_container_width=True):
-                curr_chat["is_pinned"] = not curr_chat.get("is_pinned", False)
-                trigger_save()
-                st.rerun()
-            if st.button("📦 归档此会话", use_container_width=True):
-                curr_chat["is_archived"] = True
-                trigger_save()
-                st.rerun()
-            if st.button("🗑️ 清空聊天记录", use_container_width=True):
-                curr_chat["messages"] = []
-                trigger_save()
-                st.rerun()
-            if st.button("📥 导出聊天记录", use_container_width=True):
-                st.session_state._show_export = not st.session_state.get("_show_export", False)
-                st.rerun()
-
         # 数据快照备份
         st.divider()
         with st.expander("📦 全量数据快照迁移", expanded=False):
@@ -308,8 +315,53 @@ with st.sidebar:
 if st.session_state.current_page == "💬 自由聊天区":
     curr_chat = st.session_state.free_chats[st.session_state.current_chat_id]
     
-    # 顶部仅保留固定的标题
-    st.markdown(f"<h3 style='margin-top:-10px; padding-bottom:15px; border-bottom:1px solid #ddd;'>💬 {curr_chat['title']}</h3>", unsafe_allow_html=True)
+    # --- 核心修改：顶部吸顶极简操作栏 ---
+    tc1, tc2 = st.columns([15, 1]) 
+    with tc1:
+        st.markdown('<span id="sticky-header"></span>', unsafe_allow_html=True)
+        new_title = st.text_input("会话标题", curr_chat["title"], label_visibility="collapsed")
+        if new_title != curr_chat["title"]:
+            curr_chat["title"] = new_title
+            trigger_save()
+    with tc2:
+        with st.popover("🔽", use_container_width=True):
+            st.markdown("##### ⚙️ 会话管理")
+            btn_c1, btn_c2 = st.columns(2)
+            if btn_c1.button("取消置顶" if curr_chat.get("is_pinned") else "📌 置顶", use_container_width=True):
+                curr_chat["is_pinned"] = not curr_chat.get("is_pinned", False)
+                trigger_save()
+                st.rerun()
+            if btn_c2.button("📦 归档", use_container_width=True):
+                curr_chat["is_archived"] = True
+                trigger_save()
+                st.rerun()
+            if btn_c1.button("🗑️ 清空", use_container_width=True):
+                curr_chat["messages"] = []
+                trigger_save()
+                st.rerun()
+            if btn_c2.button("📥 导出", use_container_width=True):
+                st.session_state._show_export = not st.session_state.get("_show_export", False)
+                st.rerun()
+                
+            st.divider()
+            
+            st.markdown("##### 📚 全局设定与知识库")
+            curr_chat["system_prompt"] = st.text_area("🎭 System Prompt", curr_chat.get("system_prompt", ""), height=80, placeholder="设定此会话专属的全局人设...")
+            up_f = st.file_uploader("📎 上传常驻参考文件", type=['txt', 'md', 'pdf', 'docx'], key=f"kb_{st.session_state.current_chat_id}")
+            if up_f:
+                content = extract_file_text(up_f)
+                if not any(k["filename"] == up_f.name for k in curr_chat.get("session_knowledge", [])):
+                    if "session_knowledge" not in curr_chat: curr_chat["session_knowledge"] = []
+                    curr_chat["session_knowledge"].append({"filename": up_f.name, "content": content})
+                    trigger_save()
+                    st.rerun()
+            for ki, k in enumerate(curr_chat.get("session_knowledge", [])):
+                kc1, kc2 = st.columns([4, 1])
+                kc1.caption(f"📄 {k['filename']} ({count_words(k['content']):,} 字)")
+                if kc2.button("❌", key=f"rm_kb_{ki}"):
+                    curr_chat["session_knowledge"].pop(ki)
+                    trigger_save()
+                    st.rerun()
 
     # 导出面板
     if st.session_state.get("_show_export", False):
