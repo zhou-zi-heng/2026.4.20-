@@ -7,7 +7,7 @@ from pypdf import PdfReader
 from streamlit_local_storage import LocalStorage
 
 # ==========================================
-# 1. 页面全局配置与全平台兼容极简 UI (终极稳定版)
+# 1. 页面全局配置与全平台兼容极简 UI
 # ==========================================
 st.set_page_config(page_title="ZenMux 创作者工作站", page_icon="🐙", layout="wide")
 st.markdown("""
@@ -18,7 +18,7 @@ st.markdown("""
     /* 页面安全边距：顶部给系统栏留空，底部给悬浮附件按钮留空 */
     .block-container { padding-top: 3.5rem !important; padding-bottom: 6rem !important; }
 
-    /* --- 核心优化 1：极窄吸顶标题栏 (弃用脆弱的 :has，改用最稳定的首个块定位) --- */
+    /* --- 核心优化 1：极窄吸顶标题栏 --- */
     div.stMain div[data-testid="stHorizontalBlock"]:first-of-type {
         position: sticky !important;
         top: 2.8rem !important; /* 吸顶距离 */
@@ -114,9 +114,10 @@ if dialog_decorator:
         txt_c = "\n\n".join([clean_novel_text(m['content']) for m in curr_chat["messages"] if m['role'] == 'assistant']) if is_pure else "\n".join([f"{'我' if m['role']=='user' else 'AI'}:\n{m['content']}\n\n{'-'*40}\n" for m in curr_chat["messages"]])
         
         c1, c2, c3 = st.columns(3)
-        c1.download_button("📥 导出 TXT", txt_c.encode('utf-8'), f"{curr_chat['title']}.txt", use_container_width=True)
-        c2.download_button("📥 导出 Word", generate_word_doc(curr_chat["messages"], is_pure), f"{curr_chat['title']}.docx", use_container_width=True)
-        c3.download_button("🎨 导出 HTML", export_to_pretty_html(curr_chat["messages"], curr_chat["title"], {"system_prompt": curr_chat.get("system_prompt", ""), "model": active_p["model"]}), f"{curr_chat['title']}.html", "text/html", use_container_width=True)
+        # 🔥 核心修改点：加入 mime="application/octet-stream" 强制触发 iOS 的下载面板，防止浏览器直接打开成乱码
+        c1.download_button("📥 导出 TXT", txt_c.encode('utf-8'), f"{curr_chat['title']}.txt", mime="application/octet-stream", use_container_width=True)
+        c2.download_button("📥 导出 Word", generate_word_doc(curr_chat["messages"], is_pure), f"{curr_chat['title']}.docx", mime="application/octet-stream", use_container_width=True)
+        c3.download_button("🎨 导出 HTML", export_to_pretty_html(curr_chat["messages"], curr_chat["title"], {"system_prompt": curr_chat.get("system_prompt", ""), "model": active_p["model"]}), f"{curr_chat['title']}.html", mime="application/octet-stream", use_container_width=True)
         
         st.divider()
         if st.button("❌ 关闭窗口", use_container_width=True):
@@ -281,7 +282,8 @@ with st.sidebar:
         st.divider()
         with st.expander("📦 全量数据快照迁移", expanded=False):
             full_data = json.dumps({"profiles": st.session_state.profiles, "free_chats": st.session_state.free_chats}, ensure_ascii=False, indent=2).encode('utf-8')
-            st.download_button("📥 导出全量快照", full_data, f"ZenMux_Backup_{datetime.now().strftime('%m%d_%H%M')}.json", "application/json", use_container_width=True, type="primary")
+            # 🔥 核心修改点：加入 mime="application/octet-stream" 强制 iOS 触发下载
+            st.download_button("📥 导出全量快照", full_data, f"ZenMux_Backup_{datetime.now().strftime('%m%d_%H%M')}.json", mime="application/octet-stream", use_container_width=True, type="primary")
             if uploaded_ws := st.file_uploader("📂 导入快照 (覆盖当前)", type="json"):
                 try:
                     data = json.loads(uploaded_ws.getvalue().decode('utf-8'))
