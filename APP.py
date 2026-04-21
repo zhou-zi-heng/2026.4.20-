@@ -1,46 +1,10 @@
 import streamlit as st
 from openai import OpenAI
-import io, json, re, requests, uuid, html, time, base64
+import io, json, re, requests, uuid, html, time
 from datetime import datetime
 from docx import Document
 from pypdf import PdfReader
 from streamlit_local_storage import LocalStorage
-
-# ==========================================
-# 0. 终极防屏蔽原生下载器 (专治夸克/UC等魔改浏览器)
-# ==========================================
-def get_native_download_html(data, filename, button_text):
-    """生成原生 HTML5 Base64 下载链接，完美伪装成 Streamlit 按钮"""
-    if isinstance(data, str):
-        b64 = base64.b64encode(data.encode('utf-8')).decode()
-    else:
-        b64 = base64.b64encode(data).decode()
-        
-    # 使用强二进制流骗过所有浏览器，强制拉起下载面板
-    mime = "application/octet-stream"
-    
-    html_code = f"""
-    <a href="data:{mime};base64,{b64}" download="{filename}" style="
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        width: 100%;
-        background-color: #ffffff;
-        color: #31333F;
-        border: 1px solid rgba(49, 51, 63, 0.2);
-        padding: 0.35rem 0.75rem;
-        border-radius: 8px;
-        text-decoration: none;
-        font-size: 1rem;
-        font-weight: 500;
-        box-sizing: border-box;
-        transition: all 0.2s ease-in-out;
-    " onmouseover="this.style.borderColor='#ef4444'; this.style.color='#ef4444';" 
-       onmouseout="this.style.borderColor='rgba(49, 51, 63, 0.2)'; this.style.color='#31333F';">
-        {button_text}
-    </a>
-    """
-    return html_code
 
 # ==========================================
 # 1. 页面全局配置与全平台兼容极简 UI
@@ -137,7 +101,9 @@ def execute_save():
             except Exception: pass
         st.session_state._needs_save = False
 
-# 注册原生全局弹窗
+# ==========================================
+# 🔥 终极防弹导出模态框 (双保险设计)
+# ==========================================
 dialog_decorator = getattr(st, "dialog", getattr(st, "experimental_dialog", None))
 if dialog_decorator:
     @dialog_decorator("📦 导出对话记录")
@@ -148,12 +114,16 @@ if dialog_decorator:
         txt_c = "\n\n".join([clean_novel_text(m['content']) for m in curr_chat["messages"] if m['role'] == 'assistant']) if is_pure else "\n".join([f"{'我' if m['role']=='user' else 'AI'}:\n{m['content']}\n\n{'-'*40}\n" for m in curr_chat["messages"]])
         
         c1, c2, c3 = st.columns(3)
-        # 🔥 彻底抛弃 st.download_button，采用原生 HTML 注入，无视任何浏览器魔改！
-        c1.markdown(get_native_download_html(txt_c, f"{curr_chat['title']}.txt", "📥 导出 TXT"), unsafe_allow_html=True)
-        c2.markdown(get_native_download_html(generate_word_doc(curr_chat["messages"], is_pure), f"{curr_chat['title']}.docx", "📥 导出 Word"), unsafe_allow_html=True)
-        c3.markdown(get_native_download_html(export_to_pretty_html(curr_chat["messages"], curr_chat["title"], {"system_prompt": curr_chat.get("system_prompt", ""), "model": active_p["model"]}), f"{curr_chat['title']}.html", "🎨 导出 HTML"), unsafe_allow_html=True)
+        # 第一层保险：给足标准 MIME Type，规范的浏览器会自动触发正确的预览和保存逻辑
+        c1.download_button("📥 存为 TXT", txt_c.encode('utf-8'), f"{curr_chat['title']}.txt", mime="text/plain", use_container_width=True)
+        c2.download_button("📥 存为 Word", generate_word_doc(curr_chat["messages"], is_pure), f"{curr_chat['title']}.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document", use_container_width=True)
+        c3.download_button("🎨 存为 HTML", export_to_pretty_html(curr_chat["messages"], curr_chat["title"], {"system_prompt": curr_chat.get("system_prompt", ""), "model": active_p["model"]}), f"{curr_chat['title']}.html", mime="text/html", use_container_width=True)
         
+        # 第二层终极防弹保险：直接把文本甩在屏幕上！
         st.divider()
+        st.caption("⚠️ *部分手机浏览器（如夸克）会强制拦截文件下载。如果点击上方按钮无反应或乱码，**请直接长按下方文本框全选并复制***：")
+        st.text_area("纯文本防拦截备用区", txt_c, height=200, label_visibility="collapsed")
+
         if st.button("❌ 关闭窗口", use_container_width=True):
             st.rerun()
 
@@ -316,9 +286,12 @@ with st.sidebar:
         st.divider()
         with st.expander("📦 全量数据快照迁移", expanded=False):
             full_data = json.dumps({"profiles": st.session_state.profiles, "free_chats": st.session_state.free_chats}, ensure_ascii=False, indent=2)
-            # 🔥 侧边栏全量备份同样采用原生拦截器
-            st.markdown(get_native_download_html(full_data, f"ZenMux_Backup_{datetime.now().strftime('%m%d_%H%M')}.json", "📥 导出全量快照"), unsafe_allow_html=True)
-            st.write("") # 补个空行
+            st.download_button("📥 导出全量快照", full_data.encode('utf-8'), f"ZenMux_Backup_{datetime.now().strftime('%m%d_%H%M')}.json", mime="application/json", use_container_width=True, type="primary")
+            
+            # 同样为快照配置防拦截备用区
+            st.caption("⚠️ 若浏览器拦截下载，请展开下方代码框复制并保存为 `.json` 文件：")
+            with st.expander("📄 显示快照代码"):
+                st.code(full_data, language="json")
             
             if uploaded_ws := st.file_uploader("📂 导入快照 (覆盖当前)", type="json"):
                 try:
