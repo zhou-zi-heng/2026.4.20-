@@ -1,10 +1,46 @@
 import streamlit as st
 from openai import OpenAI
-import io, json, re, requests, uuid, html, time
+import io, json, re, requests, uuid, html, time, base64
 from datetime import datetime
 from docx import Document
 from pypdf import PdfReader
 from streamlit_local_storage import LocalStorage
+
+# ==========================================
+# 0. 终极防屏蔽原生下载器 (专治夸克/UC等魔改浏览器)
+# ==========================================
+def get_native_download_html(data, filename, button_text):
+    """生成原生 HTML5 Base64 下载链接，完美伪装成 Streamlit 按钮"""
+    if isinstance(data, str):
+        b64 = base64.b64encode(data.encode('utf-8')).decode()
+    else:
+        b64 = base64.b64encode(data).decode()
+        
+    # 使用强二进制流骗过所有浏览器，强制拉起下载面板
+    mime = "application/octet-stream"
+    
+    html_code = f"""
+    <a href="data:{mime};base64,{b64}" download="{filename}" style="
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 100%;
+        background-color: #ffffff;
+        color: #31333F;
+        border: 1px solid rgba(49, 51, 63, 0.2);
+        padding: 0.35rem 0.75rem;
+        border-radius: 8px;
+        text-decoration: none;
+        font-size: 1rem;
+        font-weight: 500;
+        box-sizing: border-box;
+        transition: all 0.2s ease-in-out;
+    " onmouseover="this.style.borderColor='#ef4444'; this.style.color='#ef4444';" 
+       onmouseout="this.style.borderColor='rgba(49, 51, 63, 0.2)'; this.style.color='#31333F';">
+        {button_text}
+    </a>
+    """
+    return html_code
 
 # ==========================================
 # 1. 页面全局配置与全平台兼容极简 UI
@@ -21,24 +57,24 @@ st.markdown("""
     /* --- 核心优化 1：极窄吸顶标题栏 --- */
     div.stMain div[data-testid="stHorizontalBlock"]:first-of-type {
         position: sticky !important;
-        top: 2.8rem !important; /* 吸顶距离 */
+        top: 2.8rem !important; 
         z-index: 990 !important;
         background-color: var(--background-color, #ffffff) !important;
         padding: 5px 15px !important; 
         margin-top: -15px !important;
         border-bottom: 1px solid #e5e7eb !important;
         align-items: center !important;
-        flex-wrap: nowrap !important; /* 核心防折行：强行将标题和菜单锁在同一行！ */
+        flex-wrap: nowrap !important;
     }
     
-    /* 扒掉原生输入框的皮，伪装成纯文本标题 */
+    /* 扒掉原生输入框的皮 */
     div.stMain div[data-testid="stHorizontalBlock"]:first-of-type [data-testid="stTextInput"] { margin: 0 !important; padding: 0 !important; }
     div.stMain div[data-testid="stHorizontalBlock"]:first-of-type div[data-baseweb="input"] {
         background-color: transparent !important; border: none !important; box-shadow: none !important;
         min-height: 0 !important; padding: 0 !important; margin: 0 !important;
     }
     div.stMain div[data-testid="stHorizontalBlock"]:first-of-type input {
-        font-size: 18px !important; /* 绝对锁定 18px 防止 iOS 自动缩放，保证全平台一致 */
+        font-size: 18px !important; 
         font-weight: bold !important; padding: 0 !important; margin: 0 !important;
         height: auto !important; color: var(--text-color, #1f2937) !important;
     }
@@ -51,26 +87,24 @@ st.markdown("""
     }
     div.stMain div[data-testid="stHorizontalBlock"]:first-of-type [data-testid="stPopover"] > button:hover { color: #667eea !important; }
 
-    /* --- 核心优化 2：附件悬浮按钮 (精确锁定页面最后一个 Popover 组件) --- */
+    /* --- 核心优化 2：附件悬浮按钮 --- */
     div.stMain div[data-testid="stPopover"]:last-of-type {
         position: fixed !important;
-        bottom: 85px !important; /* 悬停在输入框正上方 */
+        bottom: 85px !important; 
         z-index: 99999 !important;
     }
     
-    /* 电脑与手机端自适应左右边距 */
     @media (min-width: 768px) {
         div.stMain div[data-testid="stPopover"]:last-of-type {
-            left: max(20px, calc(50vw - 360px)) !important; /* 电脑端自动对齐聊天主界面的左侧边缘 */
+            left: max(20px, calc(50vw - 360px)) !important; 
         }
     }
     @media (max-width: 768px) {
         div.stMain div[data-testid="stPopover"]:last-of-type {
-            bottom: 75px !important; left: 10px !important; /* 手机端紧贴左下角 */
+            bottom: 75px !important; left: 10px !important; 
         }
     }
 
-    /* 附件按钮美化：像一个轻量的独立胶囊 */
     div.stMain div[data-testid="stPopover"]:last-of-type > button {
         background-color: var(--background-color, #ffffff) !important; 
         border: 1px solid #d1d5db !important; 
@@ -103,7 +137,7 @@ def execute_save():
             except Exception: pass
         st.session_state._needs_save = False
 
-# 注册原生全局弹窗（官方原生最高层级遮罩模态框）
+# 注册原生全局弹窗
 dialog_decorator = getattr(st, "dialog", getattr(st, "experimental_dialog", None))
 if dialog_decorator:
     @dialog_decorator("📦 导出对话记录")
@@ -114,10 +148,10 @@ if dialog_decorator:
         txt_c = "\n\n".join([clean_novel_text(m['content']) for m in curr_chat["messages"] if m['role'] == 'assistant']) if is_pure else "\n".join([f"{'我' if m['role']=='user' else 'AI'}:\n{m['content']}\n\n{'-'*40}\n" for m in curr_chat["messages"]])
         
         c1, c2, c3 = st.columns(3)
-        # 🔥 核心修改点：加入 mime="application/octet-stream" 强制触发 iOS 的下载面板，防止浏览器直接打开成乱码
-        c1.download_button("📥 导出 TXT", txt_c.encode('utf-8'), f"{curr_chat['title']}.txt", mime="application/octet-stream", use_container_width=True)
-        c2.download_button("📥 导出 Word", generate_word_doc(curr_chat["messages"], is_pure), f"{curr_chat['title']}.docx", mime="application/octet-stream", use_container_width=True)
-        c3.download_button("🎨 导出 HTML", export_to_pretty_html(curr_chat["messages"], curr_chat["title"], {"system_prompt": curr_chat.get("system_prompt", ""), "model": active_p["model"]}), f"{curr_chat['title']}.html", mime="application/octet-stream", use_container_width=True)
+        # 🔥 彻底抛弃 st.download_button，采用原生 HTML 注入，无视任何浏览器魔改！
+        c1.markdown(get_native_download_html(txt_c, f"{curr_chat['title']}.txt", "📥 导出 TXT"), unsafe_allow_html=True)
+        c2.markdown(get_native_download_html(generate_word_doc(curr_chat["messages"], is_pure), f"{curr_chat['title']}.docx", "📥 导出 Word"), unsafe_allow_html=True)
+        c3.markdown(get_native_download_html(export_to_pretty_html(curr_chat["messages"], curr_chat["title"], {"system_prompt": curr_chat.get("system_prompt", ""), "model": active_p["model"]}), f"{curr_chat['title']}.html", "🎨 导出 HTML"), unsafe_allow_html=True)
         
         st.divider()
         if st.button("❌ 关闭窗口", use_container_width=True):
@@ -281,9 +315,11 @@ with st.sidebar:
 
         st.divider()
         with st.expander("📦 全量数据快照迁移", expanded=False):
-            full_data = json.dumps({"profiles": st.session_state.profiles, "free_chats": st.session_state.free_chats}, ensure_ascii=False, indent=2).encode('utf-8')
-            # 🔥 核心修改点：加入 mime="application/octet-stream" 强制 iOS 触发下载
-            st.download_button("📥 导出全量快照", full_data, f"ZenMux_Backup_{datetime.now().strftime('%m%d_%H%M')}.json", mime="application/octet-stream", use_container_width=True, type="primary")
+            full_data = json.dumps({"profiles": st.session_state.profiles, "free_chats": st.session_state.free_chats}, ensure_ascii=False, indent=2)
+            # 🔥 侧边栏全量备份同样采用原生拦截器
+            st.markdown(get_native_download_html(full_data, f"ZenMux_Backup_{datetime.now().strftime('%m%d_%H%M')}.json", "📥 导出全量快照"), unsafe_allow_html=True)
+            st.write("") # 补个空行
+            
             if uploaded_ws := st.file_uploader("📂 导入快照 (覆盖当前)", type="json"):
                 try:
                     data = json.loads(uploaded_ws.getvalue().decode('utf-8'))
@@ -306,9 +342,9 @@ if st.session_state.current_page == "💬 自由聊天区":
     if st.session_state.get("_trigger_export", False):
         if dialog_decorator:
             render_export_modal(curr_chat, active_p)
-            st.session_state._trigger_export = False # 状态重置，避免无限弹窗
+            st.session_state._trigger_export = False 
 
-    # --- 终极核心修改：强行锁定在一行的超窄吸顶栏 ---
+    # --- 强行锁定在一行的超窄吸顶栏 ---
     tc1, tc2 = st.columns([10, 1]) 
     with tc1:
         new_title = st.text_input("会话标题", curr_chat["title"], label_visibility="collapsed")
@@ -332,13 +368,13 @@ if st.session_state.current_page == "💬 自由聊天区":
                 trigger_save()
                 st.rerun()
                 
-            # 点击导出触发全局弹窗状态，立即重载拉起模态框
+            # 点击导出触发全局弹窗状态
             if btn_c2.button("📥 导出", use_container_width=True):
                 if dialog_decorator:
                     st.session_state._trigger_export = True
                     st.rerun()
                 else:
-                    st.error("您当前的 Streamlit 框架版本过旧，不支持弹出窗口，请在终端执行 pip install -U streamlit 升级。")
+                    st.error("您当前的 Streamlit 框架版本过旧，不支持弹出窗口，请升级。")
                 
             st.divider()
             
@@ -414,7 +450,7 @@ if st.session_state.current_page == "💬 自由聊天区":
     need_resend = st.session_state.pop("_auto_resend", False)
     resume_idx = st.session_state.pop("_resume_idx", None)
     
-    # --- 悬浮在输入框正上方的附件按钮 (必定为页面内的最后个 Popover) ---
+    # --- 悬浮在输入框正上方的附件按钮 ---
     with st.popover("📎 附件"):
         dyn_file = st.file_uploader("跟随消息发送单次文件", type=['txt', 'md', 'pdf', 'docx'], key="dyn_file")
         is_continuous = st.checkbox("🔄 持续参考 (勾选后对后续对话一直生效)", value=False)
