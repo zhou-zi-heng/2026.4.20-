@@ -81,39 +81,62 @@ if "initialized" not in st.session_state:
     st.session_state._stream_chat_id = None
     st.session_state._render_limit = DEFAULT_RENDER_WINDOW
 
-# 水合逻辑 (从 LocalStorage 读取)
+# 水合逻辑 (从 LocalStorage 读取) —— 修复版
 if not st.session_state.ls_loaded:
-    saved_data = localS.getItem("zenmux_data")
-    if saved_data is not None:
-        default_profiles = [{
-            "name": "默认引擎", "base_url": "", "api_key": "", "model": "anthropic/claude-3-5-sonnet-20240620",
-            "use_temperature": True, "temperature": 0.8, "use_max_tokens": True, "max_tokens": 4096,
-            "use_top_p": False, "top_p": 1.0, "use_frequency_penalty": False, "frequency_penalty": 0.0
-        }]
-        first_id = str(uuid.uuid4())
-        default_chats = {first_id: {"title": "新对话", "messages": [], "session_knowledge": [], "system_prompt": "", "is_pinned": False, "is_archived": False}}
+    # 默认数据（无论如何都要准备好）
+    default_profiles = [{
+        "name": "默认引擎", "base_url": "", "api_key": "", "model": "anthropic/claude-3-5-sonnet-20240620",
+        "use_temperature": True, "temperature": 0.8, "use_max_tokens": True, "max_tokens": 4096,
+        "use_top_p": False, "top_p": 1.0, "use_frequency_penalty": False, "frequency_penalty": 0.0
+    }]
+    first_id = str(uuid.uuid4())
+    default_chats = {first_id: {"title": "新对话", "messages": [], "session_knowledge": [],
+                                 "system_prompt": "", "is_pinned": False, "is_archived": False}}
 
-        if saved_data:
-            try:
-                data = json.loads(saved_data) if isinstance(saved_data, str) else saved_data
-                st.session_state.profiles = data.get("profiles", default_profiles)
-                st.session_state.free_chats = data.get("free_chats", default_chats)
-            except:
-                st.session_state.profiles = default_profiles
-                st.session_state.free_chats = default_chats
+    saved_data = localS.getItem("zenmux_data")
+
+    # 计数重试：前端组件首次挂载需要 1~2 次 rerun 才能回传真实值
+    retry = st.session_state.get("_ls_retry", 0)
+
+    if saved_data is None and retry < 3:
+        # 还没拿到，继续等；用占位符提示并自动重试
+        st.session_state._ls_retry = retry + 1
+        placeholder = st.empty()
+        placeholder.info(f"🔄 正在从本地安全存储加载数据... ({retry + 1}/3)")
+        import time
+        time.sleep(0.4)
+        placeholder.empty()
+        st.rerun()
+
+    # 到这里：要么拿到 saved_data，要么重试完仍为 None（视为全新用户）
+    try:
+        if saved_data and isinstance(saved_data, str):
+            data = json.loads(saved_data)
+            st.session_state.profiles = data.get("profiles", default_profiles)
+            st.session_state.free_chats = data.get("free_chats", default_chats)
+        elif saved_data and isinstance(saved_data, dict):
+            st.session_state.profiles = saved_data.get("profiles", default_profiles)
+            st.session_state.free_chats = saved_data.get("free_chats", default_chats)
         else:
+            # 全新用户或读取失败，使用默认值
             st.session_state.profiles = default_profiles
             st.session_state.free_chats = default_chats
+    except Exception as e:
+        st.warning(f"⚠️ 本地数据解析失败，已使用默认配置：{e}")
+        st.session_state.profiles = default_profiles
+        st.session_state.free_chats = default_chats
 
-        st.session_state.active_profile_idx = 0
-        st.session_state.current_chat_id = list(st.session_state.free_chats.keys())[-1]
-        st.session_state.current_page = "💬 自由聊天区"
-        st.session_state.ls_loaded = True
-        st.session_state.initialized = True
-        st.rerun()
-    else:
-        st.info("🔄 正在从本地安全存储加载数据，请稍候...")
-        st.stop()
+    # 容错：确保至少有一个对话
+    if not st.session_state.free_chats:
+        st.session_state.free_chats = default_chats
+
+    st.session_state.active_profile_idx = 0
+    st.session_state.current_chat_id = list(st.session_state.free_chats.keys())[-1]
+    st.session_state.current_page = "💬 自由聊天区"
+    st.session_state.ls_loaded = True
+    st.session_state.initialized = True
+    st.session_state._ls_retry = 0
+    st.rerun()
 
 # ==========================================
 # 3. 核心底层辅助函数
