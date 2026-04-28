@@ -24,7 +24,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==========================================
-# 2. 数据持久化层 (LocalStorage 桥接)
+# 2. 数据持久化层 (LocalStorage 桥接) - 修复版
 # ==========================================
 localS = LocalStorage()
 
@@ -33,52 +33,81 @@ def trigger_save():
 
 def execute_save():
     if st.session_state.get("_needs_save", False) and not st.session_state.get("is_streaming", False):
-        data = {
-            "profiles": st.session_state.profiles,
-            "free_chats": st.session_state.free_chats
-        }
-        localS.setItem("zenmux_data", json.dumps(data))
-        st.session_state._needs_save = False
+        try:
+            data = {
+                "profiles": st.session_state.profiles,
+                "free_chats": st.session_state.free_chats
+            }
+            localS.setItem("zenmux_data", json.dumps(data, ensure_ascii=False))
+            st.session_state._needs_save = False
+        except Exception as e:
+            pass  # 静默失败，避免打断流程
 
+# 初始化状态
 if "initialized" not in st.session_state:
     st.session_state.initialized = False
     st.session_state.ls_loaded = False
     st.session_state._needs_save = False
     st.session_state.is_streaming = False
     st.session_state.stop_streaming = False
+    st.session_state._ls_retry_count = 0
 
+# 🔥 修复：水合逻辑（带重试+超时兜底）
 if not st.session_state.ls_loaded:
-    saved_data = localS.getItem("zenmux_data")
-    if saved_data is not None:
-        default_profiles = [{
-            "name": "默认引擎", "base_url": "", "api_key": "", "model": "anthropic/claude-3-5-sonnet-20240620",
-            "use_temperature": True, "temperature": 0.8, "use_max_tokens": True, "max_tokens": 8192,
-            "use_top_p": False, "top_p": 1.0, "use_frequency_penalty": False, "frequency_penalty": 0.0
-        }]
-        first_id = str(uuid.uuid4())
-        default_chats = {first_id: {"title": "新对话", "messages": [], "session_knowledge": [], "system_prompt": "", "is_pinned": False, "is_archived": False}}
+    # 默认数据
+    default_profiles = [{
+        "name": "默认引擎", "base_url": "", "api_key": "", "model": "anthropic/claude-3-5-sonnet-20240620",
+        "use_temperature": True, "temperature": 0.8, "use_max_tokens": True, "max_tokens": 8192,
+        "use_top_p": False, "top_p": 1.0, "use_frequency_penalty": False, "frequency_penalty": 0.0
+    }]
+    first_id = str(uuid.uuid4())
+    default_chats = {first_id: {"title": "新对话", "messages": [], "session_knowledge": [], "system_prompt": "", "is_pinned": False, "is_archived": False}}
 
-        if saved_data:
-            try:
-                data = json.loads(saved_data) if isinstance(saved_data, str) else saved_data
+    # 尝试读取本地存储
+    saved_data = None
+    try:
+        saved_data = localS.getItem("zenmux_data")
+    except Exception:
+        saved_data = None
+
+    st.session_state._ls_retry_count += 1
+
+    # 🔥 核心修复：如果重试超过3次仍未ready，直接用默认值启动（避免死等）
+    if saved_data is None and st.session_state._ls_retry_count < 3:
+        # 组件可能还没ready，显示提示并重试
+        placeholder = st.empty()
+        placeholder.info(f"🔄 正在初始化本地存储... ({st.session_state._ls_retry_count}/3)")
+        import time
+        time.sleep(0.5)
+        st.rerun()
+
+    # 解析数据（即使重试超限也继续，用默认值）
+    if saved_data and saved_data != "null":
+        try:
+            data = json.loads(saved_data) if isinstance(saved_data, str) else saved_data
+            if isinstance(data, dict):
                 st.session_state.profiles = data.get("profiles", default_profiles)
                 st.session_state.free_chats = data.get("free_chats", default_chats)
-            except:
+            else:
                 st.session_state.profiles = default_profiles
                 st.session_state.free_chats = default_chats
-        else:
+        except Exception as e:
             st.session_state.profiles = default_profiles
             st.session_state.free_chats = default_chats
-
-        st.session_state.active_profile_idx = 0
-        st.session_state.current_chat_id = list(st.session_state.free_chats.keys())[-1]
-        st.session_state.current_page = "💬 自由聊天区"
-        st.session_state.ls_loaded = True
-        st.session_state.initialized = True
-        st.rerun()
     else:
-        st.info("🔄 正在从本地安全存储加载数据，请稍候...")
-        st.stop()
+        st.session_state.profiles = default_profiles
+        st.session_state.free_chats = default_chats
+
+    # 确保至少有一个chat
+    if not st.session_state.free_chats:
+        st.session_state.free_chats = default_chats
+
+    st.session_state.active_profile_idx = 0
+    st.session_state.current_chat_id = list(st.session_state.free_chats.keys())[-1]
+    st.session_state.current_page = "💬 自由聊天区"
+    st.session_state.ls_loaded = True
+    st.session_state.initialized = True
+    st.rerun()
 
 # ==========================================
 # 3. 核心底层辅助函数
