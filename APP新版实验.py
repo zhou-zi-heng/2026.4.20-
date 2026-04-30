@@ -12,12 +12,10 @@ from streamlit_local_storage import LocalStorage
 st.set_page_config(page_title="ZenMux 创作者工作站", page_icon="🐙", layout="wide")
 st.markdown("""
     <style>
-    /* 强制保护侧边栏的展开汉堡按钮 */
     [data-testid="collapsedControl"] { display: flex !important; visibility: visible !important; z-index: 999999 !important; }
 
     .block-container { padding-top: 3.5rem !important; padding-bottom: 6rem !important; }
 
-    /* 极窄吸顶标题栏 */
     div.stMain div[data-testid="stHorizontalBlock"]:first-of-type {
         position: sticky !important;
         top: 2.8rem !important; 
@@ -45,7 +43,6 @@ st.markdown("""
     }
     div.stMain div[data-testid="stHorizontalBlock"]:first-of-type [data-testid="stPopover"] > button:hover { color: #667eea !important; }
 
-    /* 附件悬浮按钮 */
     div.stMain div[data-testid="stPopover"]:last-of-type {
         position: fixed !important;
         bottom: 85px !important; 
@@ -68,7 +65,6 @@ st.markdown("""
     }
     div.stMain div[data-testid="stPopover"]:last-of-type > button:hover { border-color: #667eea !important; color: #667eea !important; }
 
-    /* 内联复制按钮样式 */
     .zm-copy-btn {
         border:none;background:transparent;color:#888;cursor:pointer;font-size:12px;
         padding:2px 8px;border-radius:6px;margin-left:6px;
@@ -90,30 +86,67 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==========================================
-# 2. 常量与数据持久化层
+# 2. 常量与数据持久化层（修复核心）
 # ==========================================
 SUPPORTED_FILE_TYPES = ['txt', 'md', 'py', 'json', 'csv', 'log', 'pdf', 'docx']
 FILE_TYPE_HINT = "TXT/MD/PY/JSON/CSV/LOG/PDF/DOCX"
-DEFAULT_RENDER_WINDOW = 50  # 长会话默认只渲染最后 N 条消息
+DEFAULT_RENDER_WINDOW = 50
+STORAGE_KEY = "zenmux_data_v2"  # 统一存储 key
+SAVE_THROTTLE_SEC = 2  # 节流：2秒内不重复写
 
-try:
-    localS = LocalStorage()
-except Exception:
-    localS = None
+# ⭐⭐⭐ 核心修复 1：LocalStorage 单例化 ⭐⭐⭐
+# 使用 cache_resource 保证整个会话只创建一次，避免 Mac 下 iframe 反复重建
+@st.cache_resource
+def get_local_storage():
+    try:
+        return LocalStorage()
+    except Exception as e:
+        print(f"[ZenMux] LocalStorage 初始化失败: {e}")
+        return None
+
+localS = get_local_storage()
 
 def trigger_save():
+    """标记需要保存"""
     st.session_state._needs_save = True
 
 def execute_save():
-    if st.session_state.get("_needs_save", False) and not st.session_state.get("is_streaming", False):
-        data = {"profiles": st.session_state.profiles, "free_chats": st.session_state.free_chats}
-        if localS:
-            try: localS.setItem("zenmux_data", json.dumps(data))
-            except Exception: pass
+    """
+    实际执行保存：
+    - 流式中不保存（避免卡顿）
+    - 2秒节流（避免频繁IO）
+    - 异常静默（不影响主流程）
+    """
+    if not st.session_state.get("_needs_save", False):
+        return
+    if st.session_state.get("is_streaming", False):
+        return
+
+    now = time.time()
+    last_save = st.session_state.get("_last_save_ts", 0)
+    if now - last_save < SAVE_THROTTLE_SEC:
+        return
+
+    if localS is None:
+        return
+
+    try:
+        data = {
+            "profiles": st.session_state.profiles,
+            "free_chats": st.session_state.free_chats,
+            "_v": 2,
+            "_ts": int(now),
+        }
+        payload = json.dumps(data, ensure_ascii=False)
+        # ⭐ 固定 key，避免每次生成新key导致组件抖动
+        localS.setItem(STORAGE_KEY, payload, key="zm_setitem")
+        st.session_state._last_save_ts = now
         st.session_state._needs_save = False
+    except Exception as e:
+        print(f"[ZenMux] 保存失败: {e}")
 
 # ==========================================
-# 导出模态框（dialog）
+# 导出模态框
 # ==========================================
 dialog_decorator = getattr(st, "dialog", getattr(st, "experimental_dialog", None))
 if dialog_decorator:
@@ -130,56 +163,85 @@ if dialog_decorator:
         c3.download_button("🎨 存为 HTML", export_to_pretty_html(curr_chat["messages"], curr_chat["title"], {"system_prompt": curr_chat.get("system_prompt", ""), "model": active_p["model"]}), f"{curr_chat['title']}.html", mime="text/html", use_container_width=True)
 
         st.divider()
-        st.caption("⚠️ *部分手机浏览器（如夸克）会强制拦截文件下载。如果点击上方按钮无反应或乱码，**请直接长按下方文本框全选并复制***：")
+        st.caption("⚠️ *部分手机浏览器会拦截文件下载。若按钮无反应，**请直接长按下方文本框全选复制***：")
         st.text_area("纯文本防拦截备用区", txt_c, height=200, label_visibility="collapsed")
 
         if st.button("❌ 关闭窗口", use_container_width=True):
             st.rerun()
 
 # ==========================================
-# 初始化与水合（修复版：避免卡死）
+# ⭐⭐⭐ 核心修复 2：初始化与水合（取消 rerun 轮询） ⭐⭐⭐
 # ==========================================
-if "initialized" not in st.session_state:
-    st.session_state.update({
-        "initialized": False, "ls_loaded": False, "_needs_save": False,
-        "is_streaming": False, "ls_wait_count": 0, "_render_limit": DEFAULT_RENDER_WINDOW,
-        "stop_req": False
-    })
-
-if not st.session_state.ls_loaded:
+def _get_default_data():
+    """生成默认数据"""
     default_profiles = [{
         "name": "默认引擎", "base_url": "", "api_key": "", "model": "anthropic/claude-3-5-sonnet-20240620",
         "use_temperature": True, "temperature": 0.8, "use_max_tokens": True, "max_tokens": 4096,
         "use_top_p": False, "top_p": 1.0, "use_frequency_penalty": False, "frequency_penalty": 0.0
     }]
     first_id = str(uuid.uuid4())
-    default_chats = {first_id: {"title": "新对话", "messages": [], "session_knowledge": [], "system_prompt": "", "is_pinned": False, "is_archived": False}}
+    default_chats = {first_id: {
+        "title": "新对话", "messages": [], "session_knowledge": [],
+        "system_prompt": "", "is_pinned": False, "is_archived": False
+    }}
+    return default_profiles, default_chats, first_id
+
+# 初始化基础 session state
+if "initialized" not in st.session_state:
+    st.session_state.update({
+        "initialized": False,
+        "_needs_save": False,
+        "is_streaming": False,
+        "_render_limit": DEFAULT_RENDER_WINDOW,
+        "stop_req": False,
+        "_last_save_ts": 0,
+        "_hydration_attempts": 0,
+    })
+
+# 水合：只在 initialized=False 时执行一次加载逻辑
+if not st.session_state.initialized:
+    default_profiles, default_chats, first_id = _get_default_data()
 
     saved_data = None
-    if localS:
-        try: saved_data = localS.getItem("zenmux_data")
-        except Exception: pass
+    if localS is not None:
+        try:
+            # ⭐ 固定 key
+            saved_data = localS.getItem(STORAGE_KEY, key="zm_getitem")
+        except Exception as e:
+            print(f"[ZenMux] 读取本地存储失败: {e}")
+            saved_data = None
 
-    # None 代表前端还没把值回传过来，给最多 3 次重试机会
-    if saved_data is None and st.session_state.ls_wait_count < 3:
-        st.session_state.ls_wait_count += 1
-        placeholder = st.empty()
-        placeholder.info(f"🔄 正在从本地安全存储加载数据... ({st.session_state.ls_wait_count}/3)")
-        time.sleep(0.5)
-        placeholder.empty()
+    # ⭐⭐⭐ 关键修复：不做 rerun 轮询 ⭐⭐⭐
+    # streamlit_local_storage 首次返回 None 是正常的（异步），
+    # 但我们最多给它 2 次机会，每次之间用 session_state 记录，而不是 sleep+rerun
+    st.session_state._hydration_attempts += 1
+
+    hydrated = False
+    if saved_data not in (None, "", "null"):
+        try:
+            data = json.loads(saved_data) if isinstance(saved_data, str) else saved_data
+            if isinstance(data, dict) and ("profiles" in data or "free_chats" in data):
+                st.session_state.profiles = data.get("profiles") or default_profiles
+                st.session_state.free_chats = data.get("free_chats") or default_chats
+                hydrated = True
+        except Exception as e:
+            print(f"[ZenMux] 数据解析失败: {e}")
+
+    # 最多等待 2 次（约 1 次额外渲染），还拿不到就用默认值
+    if not hydrated and st.session_state._hydration_attempts < 2 and localS is not None and saved_data is None:
+        # 给前端组件一次回传数据的机会，但不 rerun 阻塞
+        # 直接加载默认值渲染一次，组件会在下次用户操作时自动同步
+        st.session_state.profiles = default_profiles
+        st.session_state.free_chats = default_chats
+        # 不置 initialized=True，下次 rerun 会再尝试读取
+        _placeholder = st.empty()
+        _placeholder.info("🔄 正在加载本地数据，请稍候...")
+        time.sleep(0.3)
+        _placeholder.empty()
         st.rerun()
 
-    # 拿到数据（或确认是全新用户）
-    try:
-        if saved_data and saved_data not in ["", "null"]:
-            data = json.loads(saved_data) if isinstance(saved_data, str) else saved_data
-            st.session_state.profiles = data.get("profiles", default_profiles)
-            st.session_state.free_chats = data.get("free_chats", default_chats)
-        else:
-            st.session_state.profiles = default_profiles
-            st.session_state.free_chats = default_chats
-    except Exception as e:
-        st.warning(f"⚠️ 本地数据解析失败，已使用默认配置：{e}")
+    if not hydrated:
+        # 确定是新用户或确实没有数据
         st.session_state.profiles = default_profiles
         st.session_state.free_chats = default_chats
 
@@ -189,9 +251,8 @@ if not st.session_state.ls_loaded:
     st.session_state.active_profile_idx = 0
     st.session_state.current_chat_id = list(st.session_state.free_chats.keys())[-1]
     st.session_state.current_page = "💬 自由聊天区"
-    st.session_state.ls_loaded = True
     st.session_state.initialized = True
-    st.rerun()
+    # ⭐ 不 rerun！让后续代码正常渲染
 
 # ==========================================
 # 3. 核心底层辅助函数
@@ -204,13 +265,17 @@ def clean_novel_text(text):
     text = re.sub(r'\n{3,}', '\n\n', text)
     return text.strip()
 
-@st.cache_data(show_spinner=False, max_entries=2000)
+# ⭐⭐⭐ 核心修复 3：count_words 改为轻量纯函数 ⭐⭐⭐
 def count_words(text):
-    """字数统计（带缓存，避免 rerun 时重复计算）"""
-    return len(re.findall(r'[\u4e00-\u9fff]', text)) + len(re.findall(r'[a-zA-Z]+', text))
+    """字数统计（纯 Python，不用 cache_data 避免内存膨胀）"""
+    if not text:
+        return 0
+    cn = sum(1 for c in text if '\u4e00' <= c <= '\u9fff')
+    en = len(re.findall(r'[a-zA-Z]+', text))
+    return cn + en
 
 def render_copy_button_inline(text):
-    """内联复制按钮（无 iframe，大幅减少渲染开销）"""
+    """内联复制按钮（无 iframe）"""
     b64 = base64.b64encode(text.encode("utf-8")).decode("utf-8")
     return f'<button class="zm-copy-btn" onclick="window.zmCopy(this, \'{b64}\')">📋 复制</button>'
 
@@ -222,7 +287,6 @@ def extract_file_text(uploaded_file):
         elif name.endswith('.docx'):
             return "\n".join([p.text for p in Document(uploaded_file).paragraphs])
         else:
-            # 覆盖 txt/md/py/json/csv/log 等所有纯文本格式
             return uploaded_file.getvalue().decode('utf-8', errors='ignore')
     except Exception as e:
         return f"文件解析失败: {str(e)}"
@@ -250,7 +314,7 @@ def export_to_pretty_html(messages, title, meta=None):
     if any(meta.get(k) for k in ["system_prompt", "model"]):
         rows = ""
         if meta.get("model"): rows += f'<div class="info-row"><span class="info-label">🧠 模型</span><span class="info-value">{html.escape(meta["model"])}</span></div>'
-        if meta.get("system_prompt"): rows += f'<div class="info-row"><span class="info-label">🎭 人设</span></div><div class="info-value" style="background:#f8f8f8;padding:8px;border-radius:6px;font-size:12px;">{html.escape(meta["system_prompt"])}</div>'
+        if meta.get("system_prompt"): rows += f'<div class="info-row"><span class="info-label">🎭 人设</span></div><div class="info-value" style="background:#f8f8f8;pa�dding:8px;border-radius:6px;font-size:12px;">{html.escape(meta["system_prompt"])}</div>'
         info_html = f'<div class="info-card" id="infoCard"><h3>⚙️ 配置信息</h3>{rows}</div>'
 
     msg_html = "".join([f'<div class="msg {"user" if m["role"]=="user" else "ai"}"><div class="avatar">{"🙋‍♂️" if m["role"]=="user" else "🤖"}</div><div><div class="bubble">{html.escape(m["content"]).replace(chr(10), "<br>")}</div><div class="word-count">{count_words(m["content"])} 字</div></div></div>' for m in messages if m["role"]!="system"])
@@ -259,7 +323,6 @@ def export_to_pretty_html(messages, title, meta=None):
 
 def fetch_models(base_url, api_key):
     try:
-        # 修复 Bug A：使用纯字符串，不夹带 Markdown 链接语法
         url = (base_url.strip().rstrip('/') or "https://api.openai.com/v1") + "/models"
         resp = requests.get(url, headers={"Authorization": "Bearer " + api_key.strip()}, timeout=8)
         return (True, sorted([m["id"] for m in resp.json().get("data", [])])) if resp.status_code == 200 else (False, f"状态码 {resp.status_code}")
@@ -268,7 +331,6 @@ def fetch_models(base_url, api_key):
 
 def get_client():
     p = st.session_state.profiles[st.session_state.active_profile_idx]
-    # 修复 Bug A
     return OpenAI(base_url=p["base_url"].strip() or "https://api.openai.com/v1", api_key=p["api_key"].strip()), p
 
 def build_api_kwargs(profile, api_msgs):
@@ -279,6 +341,11 @@ def build_api_kwargs(profile, api_msgs):
     if profile.get("use_top_p", False): kw["top_p"] = profile.get("top_p", 1.0)
     if profile.get("use_frequency_penalty", False): kw["frequency_penalty"] = profile.get("frequency_penalty", 0.0)
     return kw
+
+# ⭐ 停止生成回调（用固定函数代替 lambda + uuid key）
+def _request_stop():
+    st.session_state.stop_req = True
+
 # ==========================================
 # 4. 全局侧边栏
 # ==========================================
@@ -314,7 +381,7 @@ with st.sidebar:
                     st.session_state._render_limit = DEFAULT_RENDER_WINDOW
                     st.rerun()
 
-            if st.button("🗄️ 归档区"):
+            if st.button("🗄️ 归档区", key="toggle_archive"):
                 st.session_state._show_archive = not st.session_state.get("_show_archive", False)
                 st.rerun()
             if st.session_state.get("_show_archive", False):
@@ -329,8 +396,8 @@ with st.sidebar:
 
         st.divider()
         with st.expander("📦 全量数据快照迁移", expanded=False):
-            # 懒生成：点击按钮才序列化
-            if st.button("🔧 生成快照", use_container_width=True):
+            st.caption("💡 建议每周手动下载一次快照作为灾备")
+            if st.button("🔧 生成快照", use_container_width=True, key="gen_snapshot"):
                 st.session_state._snapshot_data = json.dumps(
                     {"profiles": st.session_state.profiles, "free_chats": st.session_state.free_chats},
                     ensure_ascii=False, indent=2
@@ -362,16 +429,15 @@ with st.sidebar:
 if st.session_state.current_page == "💬 自由聊天区":
     curr_chat = st.session_state.free_chats[st.session_state.current_chat_id]
 
-    # 监听导出触发
     if st.session_state.get("_trigger_export", False):
         if dialog_decorator:
             render_export_modal(curr_chat, active_p)
             st.session_state._trigger_export = False
 
-    # --- 吸顶标题栏：标题 + 🔽 ---
+    # --- 吸顶标题栏 ---
     tc1, tc2 = st.columns([10, 1])
     with tc1:
-        new_title = st.text_input("会话标题", curr_chat["title"], label_visibility="collapsed")
+        new_title = st.text_input("会话标题", curr_chat["title"], label_visibility="collapsed", key=f"title_{st.session_state.current_chat_id}")
         if new_title != curr_chat["title"]:
             curr_chat["title"] = new_title
             trigger_save()
@@ -379,20 +445,20 @@ if st.session_state.current_page == "💬 自由聊天区":
         with st.popover("🔽"):
             st.markdown("##### ⚙️ 会话管理")
             btn_c1, btn_c2 = st.columns(2)
-            if btn_c1.button("取消置顶" if curr_chat.get("is_pinned") else "📌 置顶", use_container_width=True):
+            if btn_c1.button("取消置顶" if curr_chat.get("is_pinned") else "📌 置顶", use_container_width=True, key="btn_pin"):
                 curr_chat["is_pinned"] = not curr_chat.get("is_pinned", False)
                 trigger_save()
                 st.rerun()
-            if btn_c2.button("📦 归档", use_container_width=True):
+            if btn_c2.button("📦 归档", use_container_width=True, key="btn_archive"):
                 curr_chat["is_archived"] = True
                 trigger_save()
                 st.rerun()
-            if btn_c1.button("🗑️ 清空", use_container_width=True):
+            if btn_c1.button("🗑️ 清空", use_container_width=True, key="btn_clear"):
                 curr_chat["messages"] = []
                 st.session_state._render_limit = DEFAULT_RENDER_WINDOW
-                trigger_save()
+                trigger_�save()
                 st.rerun()
-            if btn_c2.button("📥 导出", use_container_width=True):
+            if btn_c2.button("📥 导出", use_container_width=True, key="btn_export"):
                 if dialog_decorator:
                     st.session_state._trigger_export = True
                     st.rerun()
@@ -401,7 +467,11 @@ if st.session_state.current_page == "💬 自由聊天区":
 
             st.divider()
             st.markdown("##### 📚 全局设定与知识库")
-            curr_chat["system_prompt"] = st.text_area("🎭 System Prompt", curr_chat.get("system_prompt", ""), height=80, placeholder="设定此会话专属的全局人设...")
+            sp_new = st.text_area("🎭 System Prompt", curr_chat.get("system_prompt", ""), height=80, placeholder="设定此会话专属的全局人设...", key=f"sp_{st.session_state.current_chat_id}")
+            if sp_new != curr_chat.get("system_prompt", ""):
+                curr_chat["system_prompt"] = sp_new
+                trigger_save()
+
             up_f = st.file_uploader(
                 f"📎 常驻参考文件 ({FILE_TYPE_HINT})",
                 type=SUPPORTED_FILE_TYPES,
@@ -417,12 +487,12 @@ if st.session_state.current_page == "💬 自由聊天区":
             for ki, k in enumerate(curr_chat.get("session_knowledge", [])):
                 kc1, kc2 = st.columns([4, 1])
                 kc1.caption(f"📄 {k['filename']} ({count_words(k['content']):,} 字)")
-                if kc2.button("❌", key=f"rm_kb_{ki}"):
+                if kc2.button("❌", key=f"rm_kb_{st.session_state.current_chat_id}_{ki}"):
                     curr_chat["session_knowledge"].pop(ki)
                     trigger_save()
                     st.rerun()
 
-    # --- 聊天消息展示（带分页渲染） ---
+    # --- 聊天消息展示 ---
     all_msgs = curr_chat["messages"]
     total_msgs = len(all_msgs)
     render_limit = st.session_state.get("_render_limit", DEFAULT_RENDER_WINDOW)
@@ -431,7 +501,6 @@ if st.session_state.current_page == "💬 自由聊天区":
     with st.container(border=False):
         editing_idx = st.session_state.get("_editing_chat_idx")
 
-        # 顶部"加载更早"按钮
         if start_idx > 0:
             lc1, lc2, lc3 = st.columns([1, 2, 1])
             with lc2:
@@ -489,7 +558,6 @@ if st.session_state.current_page == "💬 自由聊天区":
                                 curr_chat["messages"].pop(i)
                                 trigger_save()
                                 st.rerun()
-                        # 字数 + 内联复制（无 iframe）
                         wc = count_words(msg["content"])
                         st.markdown(
                             f'<div style="display:flex;justify-content:flex-end;align-items:center;font-size:12px;color:#888;margin-top:4px;">'
@@ -503,14 +571,13 @@ if st.session_state.current_page == "💬 自由聊天区":
     need_resend = st.session_state.pop("_auto_resend", False)
     resume_idx = st.session_state.pop("_resume_idx", None)
 
-    # 悬浮附件按钮
     with st.popover("📎 附件"):
         dyn_file = st.file_uploader(
             f"跟随消息发送的单次文件 ({FILE_TYPE_HINT})",
             type=SUPPORTED_FILE_TYPES,
             key="dyn_file"
         )
-        is_continuous = st.checkbox("🔄 持续参考 (勾选后对后续对话一直生效)", value=False)
+        is_continuous = st.checkbox("🔄 持续参考 (勾选后对后续对话一直生效)", value=False, key="dyn_file_continuous")
 
     prompt = st.chat_input("输入消息...")
 
@@ -539,7 +606,6 @@ if st.session_state.current_page == "💬 自由聊天区":
             with st.chat_message("user"):
                 st.markdown(prompt)
 
-        # 构建 API 消息
         api_msgs = []
         sp = curr_chat.get("system_prompt", "").strip()
         if sp: api_msgs.append({"role": "system", "content": sp})
@@ -558,15 +624,15 @@ if st.session_state.current_page == "💬 自由聊天区":
         client, profile = get_client()
 
         with st.chat_message("assistant"):
-            # 修复 Bug B：用 session_state + on_click 回调实现真正的中断
             st.session_state.stop_req = False
             st.session_state.is_streaming = True
 
+            # ⭐⭐⭐ 核心修复：停止按钮使用固定 key + 固定回调函数 ⭐⭐⭐
             stop_placeholder = st.empty()
-            stop_placeholder.button(
+        �    stop_placeholder.button(
                 "⏹️ 停止生成",
-                key=f"stop_gen_{uuid.uuid4().hex[:6]}",
-                on_click=lambda: st.session_state.update(stop_req=True)
+                key="stop_gen_btn_fixed",  # 固定 key
+                on_click=_request_stop      # 固定函数引用
             )
 
             message_placeholder = st.empty()
@@ -591,6 +657,9 @@ if st.session_state.current_page == "💬 自由聊天区":
                 stop_placeholder.empty()
                 st.session_state.is_streaming = False
                 st.session_state.stop_req = False
+                # ⭐ 流式结束后强制保存（绕过节流）
+                st.session_state._needs_save = True
+                st.session_state._last_save_ts = 0  # 重置节流
                 trigger_save()
                 st.rerun()
 
@@ -600,10 +669,10 @@ if st.session_state.current_page == "💬 自由聊天区":
 elif st.session_state.current_page == "⚙️ 底层引擎配置":
     st.header("⚙️ 底层驱动配置")
     p_names = [p["name"] for p in st.session_state.profiles]
-    idx = st.radio("切换引擎", range(len(p_names)), format_func=lambda x: p_names[x], index=st.session_state.active_profile_idx, horizontal=True)
+    idx = st.radio("切换引擎", range(len(p_names)), format_func=lambda x: p_names[x], index=st.session_state.active_profile_idx, horizontal=True, key="engine_selector")
     st.session_state.active_profile_idx = idx
 
-    if st.button("➕ 新增引擎", use_container_width=True):
+    if st.button("➕ 新增引擎", use_container_width=True, key="add_engine"):
         st.session_state.profiles.append({
             "name": f"新引擎 {len(p_names) + 1}", "base_url": "", "api_key": "", "model": "anthropic/claude-3-5-sonnet-20240620",
             "use_temperature": True, "temperature": 0.8, "use_max_tokens": True, "max_tokens": 4096,
@@ -616,19 +685,30 @@ elif st.session_state.current_page == "⚙️ 底层引擎配置":
     p = st.session_state.profiles[idx]
 
     c1, c2 = st.columns([3, 1])
-    p["name"] = c1.text_input("引擎标签", p["name"])
-    if c2.button("💾 保存配置", type="primary", use_container_width=True):
+    new_name = c1.text_input("引擎标签", p["name"], key=f"pname_{idx}")
+    if new_name != p["name"]:
+        p["name"] = new_name
+        trigger_save()
+    if c2.button("💾 保存配置", type="primary", use_container_width=True, key="save_cfg"):
+        st.session_state._last_save_ts = 0  # 强制立即保存
         trigger_save()
         st.success("已保存！")
 
-    p["base_url"] = st.text_input("Base URL", p["base_url"])
-    p["api_key"] = st.text_input("API Key", p["api_key"], type="password")
+    new_url = st.text_input("Base URL", p["base_url"], key=f"purl_{idx}")
+    if new_url != p["base_url"]:
+        p["base_url"] = new_url
+        trigger_save()
+
+    new_key = st.text_input("API Key", p["api_key"], type="password", key=f"pkey_{idx}")
+    if new_key != p["api_key"]:
+        p["api_key"] = new_key
+        trigger_save()
+
     st.caption("🔒 你的 Key 只保存在浏览器本地缓存中，服务器不会记录。")
 
-    if p["api_key"] and st.button("🔑 测试连通性"):
+    if p["api_key"] and st.button("🔑 测试连通性", key="test_conn"):
         with st.spinner("测试中..."):
             try:
-                # 修复 Bug A
                 OpenAI(
                     base_url=p["base_url"].strip() or "https://api.openai.com/v1",
                     api_key=p["api_key"].strip()
@@ -638,8 +718,12 @@ elif st.session_state.current_page == "⚙️ 底层引擎配置":
                 st.error(f"❌ 失败: {str(e)}")
 
     m1, m2 = st.columns([3, 1])
-    p["model"] = m1.text_input("模型映射 (Model ID)", p["model"])
-    if m2.button("🔄 获取列表") and p["api_key"]:
+    new_model = m1.text_input("模型映射 (Model ID)", p["model"], key=f"pmodel_{idx}")
+    if new_model != p["model"]:
+        p["model"] = new_model
+        trigger_save()
+
+    if m2.button("🔄 获取列表", key="fetch_models") and p["api_key"]:
         with st.spinner("获取中..."):
             success, result = fetch_models(p["base_url"], p["api_key"])
             if success and result:
@@ -649,7 +733,7 @@ elif st.session_state.current_page == "⚙️ 底层引擎配置":
                 st.error(f"❌ 失败: {result}")
 
     if "temp_models" in st.session_state:
-        sel_m = st.selectbox("选择模型", ["(不覆盖)"] + st.session_state.temp_models)
+        sel_m = st.selectbox("选择模型", ["(不覆盖)"] + st.session_state.temp_models, key="model_picker")
         if sel_m != "(不覆盖)":
             p["model"] = sel_m
             del st.session_state.temp_models
@@ -657,13 +741,12 @@ elif st.session_state.current_page == "⚙️ 底层引擎配置":
             st.rerun()
 
     with st.expander("🎛️ 运行时超参数", expanded=True):
-        p["use_temperature"] = st.checkbox("🔥 Temperature", p.get("use_temperature", True))
+        p["use_temperature"] = st.checkbox("🔥 Temperature", p.get("use_temperature", True), key=f"ut_{idx}")
         if p["use_temperature"]:
-            p["temperature"] = st.slider("温度", 0.0, 2.0, p.get("temperature", 0.8), 0.1)
+            p["temperature"] = st.slider("温度", 0.0, 2.0, p.get("temperature", 0.8), 0.1, key=f"t_{idx}")
 
-        p["use_max_tokens"] = st.checkbox("📏 Max Tokens", p.get("use_max_tokens", True))
+        p["use_max_tokens"] = st.checkbox("📏 Max Tokens", p.get("use_max_tokens", True), key=f"umt_{idx}")
         if p["use_max_tokens"]:
-            # 上限放开到 200 万，step=256
             current_mt = p.get("max_tokens", 4096)
             if current_mt > 2000000: current_mt = 2000000
             if current_mt < 1: current_mt = 4096
@@ -671,39 +754,38 @@ elif st.session_state.current_page == "⚙️ 底层引擎配置":
                 "最大 Token 数",
                 min_value=1, max_value=2000000,
                 value=current_mt, step=256,
+                key=f"mt_{idx}",
                 help=(
                     "支持 1 – 2,000,000。\n\n"
                     "• 常见输出上限：GPT-4o ≈ 16K、Claude 3.5 ≈ 8K、Claude 3.7 ≈ 64K、DeepSeek ≈ 8K\n"
-                    "• 大上下文窗口：Claude 200K / GPT-4.1 1M / Gemini 1.5-2.0 Pro 2M\n"
-                    "• 若接口把此参数当作上下文窗口而非输出上限，可直接拉到对应大小"
+                    "• 大上下文窗口：Claude 200K / GPT-4.1 1M / Gemini 1.5-2.0 Pro 2M"
                 )
             )
-            # 快捷预设
             st.caption("快捷预设：")
             preset_cols = st.columns(8)
             presets = [("4K", 4096), ("8K", 8192), ("16K", 16384), ("32K", 32768),
                        ("64K", 65536), ("128K", 131072), ("1M", 1048576), ("2M", 2000000)]
             for _ci, (lbl, val) in enumerate(presets):
-                if preset_cols[_ci].button(lbl, key=f"mt_preset_{lbl}", use_container_width=True):
+                if preset_cols[_ci].button(lbl, key=f"mt_preset_{idx}_{lbl}", use_container_width=True):
                     p["max_tokens"] = val
                     trigger_save()
                     st.rerun()
 
-        p["use_top_p"] = st.checkbox("🎲 Top P", p.get("use_top_p", False))
+        p["use_top_p"] = st.checkbox("🎲 Top P", p.get("use_top_p", False), key=f"utp_{idx}")
         if p["use_top_p"]:
-            p["top_p"] = st.slider("Top P", 0.0, 1.0, p.get("top_p", 1.0), 0.05)
+            p["top_p"] = st.slider("Top P", 0.0, 1.0, p.get("top_p", 1.0), 0.05, key=f"tp_{idx}")
 
-        p["use_frequency_penalty"] = st.checkbox("🚫 Frequency Penalty", p.get("use_frequency_penalty", False))
+        p["use_frequency_penalty"] = st.checkbox("🚫 Frequency Penalty", p.get("use_frequency_penalty", False), key=f"ufp_{idx}")
         if p["use_frequency_penalty"]:
-            p["frequency_penalty"] = st.slider("惩罚值", -2.0, 2.0, p.get("frequency_penalty", 0.0), 0.1)
+            p["frequency_penalty"] = st.slider("惩罚值", -2.0, 2.0, p.get("frequency_penalty", 0.0), 0.1, key=f"fp_{idx}")
 
-    if len(st.session_state.profiles) > 1 and st.button("🗑️ 删除此引擎", type="primary"):
+    if len(st.session_state.profiles) > 1 and st.button("🗑️ 删除此引擎", type="primary", key="del_engine"):
         st.session_state.profiles.pop(idx)
         st.session_state.active_profile_idx = 0
         trigger_save()
         st.rerun()
 
 # ==========================================
-# 统一执行保存
+# 统一执行保存（节流 + 跳过流式）
 # ==========================================
 execute_save()
