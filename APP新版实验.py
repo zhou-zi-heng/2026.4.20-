@@ -456,7 +456,7 @@ if st.session_state.current_page == "💬 自由聊天区":
             if btn_c1.button("🗑️ 清空", use_container_width=True, key="btn_clear"):
                 curr_chat["messages"] = []
                 st.session_state._render_limit = DEFAULT_RENDER_WINDOW
-                trigger_�save()
+                trigger_save()
                 st.rerun()
             if btn_c2.button("📥 导出", use_container_width=True, key="btn_export"):
                 if dialog_decorator:
