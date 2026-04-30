@@ -314,7 +314,7 @@ def export_to_pretty_html(messages, title, meta=None):
     if any(meta.get(k) for k in ["system_prompt", "model"]):
         rows = ""
         if meta.get("model"): rows += f'<div class="info-row"><span class="info-label">🧠 模型</span><span class="info-value">{html.escape(meta["model"])}</span></div>'
-        if meta.get("system_prompt"): rows += f'<div class="info-row"><span class="info-label">🎭 人设</span></div><div class="info-value" style="background:#f8f8f8;pa�dding:8px;border-radius:6px;font-size:12px;">{html.escape(meta["system_prompt"])}</div>'
+        if meta.get("system_prompt"): rows += f'<div class="info-row"><span class="info-label">🎭 人设</span></div><div class="info-value" style="background:#f8f8f8;padding:8px;border-radius:6px;font-size:12px;">{html.escape(meta["system_prompt"])}</div>'
         info_html = f'<div class="info-card" id="infoCard"><h3>⚙️ 配置信息</h3>{rows}</div>'
 
     msg_html = "".join([f'<div class="msg {"user" if m["role"]=="user" else "ai"}"><div class="avatar">{"🙋‍♂️" if m["role"]=="user" else "🤖"}</div><div><div class="bubble">{html.escape(m["content"]).replace(chr(10), "<br>")}</div><div class="word-count">{count_words(m["content"])} 字</div></div></div>' for m in messages if m["role"]!="system"])
@@ -629,7 +629,7 @@ if st.session_state.current_page == "💬 自由聊天区":
 
             # ⭐⭐⭐ 核心修复：停止按钮使用固定 key + 固定回调函数 ⭐⭐⭐
             stop_placeholder = st.empty()
-        �    stop_placeholder.button(
+            stop_placeholder.button(
                 "⏹️ 停止生成",
                 key="stop_gen_btn_fixed",  # 固定 key
                 on_click=_request_stop      # 固定函数引用
