@@ -4,15 +4,7 @@ import io, base64, json, re, requests, uuid, html, time
 from datetime import datetime
 from docx import Document
 from pypdf import PdfReader
-
-# ==========================================
-# 0. 安全导入 LocalStorage
-# ==========================================
-try:
-    from streamlit_local_storage import LocalStorage
-    _LS_AVAILABLE = True
-except ImportError:
-    _LS_AVAILABLE = False
+from streamlit_local_storage import LocalStorage
 
 # ==========================================
 # 1. 页面全局配置与全平台兼容极简 UI
@@ -102,15 +94,30 @@ DEFAULT_RENDER_WINDOW = 50
 STORAGE_KEY = "zenmux_data_v2"
 SAVE_THROTTLE_SEC = 2
 
-
-def _get_ls_instance():
-    """每次调用时安全获取 LocalStorage 实例（不缓存）"""
-    if not _LS_AVAILABLE:
-        return None
+@st.cache_resource
+def get_local_storage():
     try:
         return LocalStorage()
-    except Exception:
+    except Exception as e:
+        print(f"[ZenMux] LocalStorage 初始化失败: {e}")
         return None
+
+localS = get_local_storage()
+
+
+# ==========================================
+# Widget 同步辅助函数
+# ==========================================
+def _sync_widget(key, value):
+    """程序主动修改数据后，同步对应 widget 的内部状态"""
+    st.session_state[key] = value
+
+
+def _clear_widget_keys(*prefixes):
+    """批量清除指定前缀的 widget keys，防止残留旧值"""
+    to_del = [k for k in list(st.session_state.keys()) if any(k.startswith(p) for p in prefixes)]
+    for k in to_del:
+        del st.session_state[k]
 
 
 def trigger_save():
@@ -119,12 +126,7 @@ def trigger_save():
 
 
 def execute_save():
-    """
-    实际执行保存：
-    - 流式中不保存
-    - 2秒节流
-    - 异常静默
-    """
+    """实际执行保存（节流+流式跳过+异常静默）"""
     if not st.session_state.get("_needs_save", False):
         return
     if st.session_state.get("is_streaming", False):
@@ -135,15 +137,11 @@ def execute_save():
     if now - last_save < SAVE_THROTTLE_SEC:
         return
 
-    if not _LS_AVAILABLE:
+    if localS is None:
         st.session_state._needs_save = False
         return
 
     try:
-        ls = _get_ls_instance()
-        if ls is None:
-            st.session_state._needs_save = False
-            return
         data = {
             "profiles": st.session_state.profiles,
             "free_chats": st.session_state.free_chats,
@@ -151,7 +149,7 @@ def execute_save():
             "_ts": int(now),
         }
         payload = json.dumps(data, ensure_ascii=False)
-        ls.setItem(STORAGE_KEY, payload, key="zm_save_exec")
+        localS.setItem(STORAGE_KEY, payload, key="zm_setitem")
         st.session_state._last_save_ts = now
         st.session_state._needs_save = False
     except Exception as e:
@@ -162,22 +160,14 @@ def execute_save():
 # ==========================================
 # 导出模态框
 # ==========================================
-_has_dialog = False
-dialog_decorator = None
-try:
-    dialog_decorator = getattr(st, "dialog", None)
-    if dialog_decorator is None:
-        dialog_decorator = getattr(st, "experimental_dialog", None)
-    if dialog_decorator and callable(dialog_decorator):
-        _has_dialog = True
-    else:
-        dialog_decorator = None
-        _has_dialog = False
-except Exception:
+dialog_decorator = getattr(st, "dialog", None)
+if dialog_decorator is None:
+    dialog_decorator = getattr(st, "experimental_dialog", None)
+# 验证是否可调用
+if dialog_decorator is not None and not callable(dialog_decorator):
     dialog_decorator = None
-    _has_dialog = False
 
-if _has_dialog:
+if dialog_decorator:
     @dialog_decorator("📦 导出对话记录")
     def render_export_modal(curr_chat, active_p):
         st.write("请选择您需要的导出格式：")
@@ -224,23 +214,21 @@ if "initialized" not in st.session_state:
         "_render_limit": DEFAULT_RENDER_WINDOW,
         "stop_req": False,
         "_last_save_ts": 0,
-        "_hydration_done": False,
+        "_hydration_attempts": 0,
     })
 
 if not st.session_state.initialized:
     default_profiles, default_chats, first_id = _get_default_data()
 
-    # 尝试从本地存储读取（只尝试一次，不阻塞）
     saved_data = None
-    if _LS_AVAILABLE and not st.session_state.get("_hydration_done", False):
+    if localS is not None:
         try:
-            ls = _get_ls_instance()
-            if ls is not None:
-                saved_data = ls.getItem(STORAGE_KEY, key="zm_load_init")
+            saved_data = localS.getItem(STORAGE_KEY, key="zm_getitem")
         except Exception as e:
             print(f"[ZenMux] 读取本地存储失败: {e}")
             saved_data = None
-        st.session_state._hydration_done = True
+
+    st.session_state._hydration_attempts += 1
 
     hydrated = False
     if saved_data not in (None, "", "null"):
@@ -252,6 +240,15 @@ if not st.session_state.initialized:
                 hydrated = True
         except Exception as e:
             print(f"[ZenMux] 数据解析失败: {e}")
+
+    if not hydrated and st.session_state._hydration_attempts < 2 and localS is not None and saved_data is None:
+        st.session_state.profiles = default_profiles
+        st.session_state.free_chats = default_chats
+        _placeholder = st.empty()
+        _placeholder.info("🔄 正在加载本地数据，请稍候...")
+        time.sleep(0.3)
+        _placeholder.empty()
+        st.rerun()
 
     if not hydrated:
         st.session_state.profiles = default_profiles
@@ -349,10 +346,7 @@ def fetch_models(base_url, api_key):
     try:
         url = (base_url.strip().rstrip('/') or "https://api.openai.com/v1") + "/models"
         resp = requests.get(url, headers={"Authorization": "Bearer " + api_key.strip()}, timeout=8)
-        if resp.status_code == 200:
-            return (True, sorted([m["id"] for m in resp.json().get("data", [])]))
-        else:
-            return (False, f"状态码 {resp.status_code}")
+        return (True, sorted([m["id"] for m in resp.json().get("data", [])])) if resp.status_code == 200 else (False, f"状态码 {resp.status_code}")
     except Exception as e:
         return False, str(e)
 
@@ -386,6 +380,11 @@ with st.sidebar:
     st.title("🐙 ZenMux")
     page = st.radio("导航", ["💬 自由聊天区", "⚙️ 底层引擎配置"], label_visibility="collapsed")
     st.session_state.current_page = page
+
+    # ⭐ 防御：active_profile_idx 越界
+    if st.session_state.active_profile_idx >= len(st.session_state.profiles):
+        st.session_state.active_profile_idx = 0
+
     active_p = st.session_state.profiles[st.session_state.active_profile_idx]
     st.caption(f"🟢 当前引擎: {active_p['name']} | 🧠 {active_p['model']}")
     st.divider()
@@ -443,7 +442,8 @@ with st.sidebar:
                 with st.expander("📄 防拦截：复制快照代码"):
                     st.code(st.session_state._snapshot_data, language="json")
 
-            uploaded_ws = st.file_uploader("📂 导入快照 (覆盖当前)", type="json", key="import_snapshot")
+            # ⭐ Fix Bug 7: 给 file_uploader 固定 key
+            uploaded_ws = st.file_uploader("📂 导入快照 (覆盖当前)", type="json", key="import_snapshot_file")
             if uploaded_ws:
                 try:
                     data = json.loads(uploaded_ws.getvalue().decode('utf-8'))
@@ -451,6 +451,14 @@ with st.sidebar:
                     st.session_state.free_chats = data.get("free_chats", st.session_state.free_chats)
                     st.session_state.active_profile_idx = 0
                     st.session_state.current_chat_id = list(st.session_state.free_chats.keys())[-1]
+                    # ⭐ Fix Bug 4: 清除所有引擎配置相关的 widget keys
+                    _clear_widget_keys(
+                        "pname_", "purl_", "pkey_", "pmodel_",
+                        "ut_", "umt_", "mt_", "t_",
+                        "utp_", "tp_", "ufp_", "fp_",
+                        "title_", "sp_", "kb_",
+                        "engine_selector", "model_picker"
+                    )
                     trigger_save()
                     st.success("✅ 恢复成功！")
                     st.rerun()
@@ -463,9 +471,10 @@ with st.sidebar:
 if st.session_state.current_page == "💬 自由聊天区":
     curr_chat = st.session_state.free_chats[st.session_state.current_chat_id]
 
-    if st.session_state.get("_trigger_export", False) and _has_dialog:
-        render_export_modal(curr_chat, active_p)
-        st.session_state._trigger_export = False
+    if st.session_state.get("_trigger_export", False):
+        if dialog_decorator:
+            render_export_modal(curr_chat, active_p)
+            st.session_state._trigger_export = False
 
     # --- 吸顶标题栏 ---
     tc1, tc2 = st.columns([10, 1])
@@ -492,7 +501,7 @@ if st.session_state.current_page == "💬 自由聊天区":
                 trigger_save()
                 st.rerun()
             if btn_c2.button("📥 导出", use_container_width=True, key="btn_export"):
-                if _has_dialog:
+                if dialog_decorator:
                     st.session_state._trigger_export = True
                     st.rerun()
                 else:
@@ -626,8 +635,12 @@ if st.session_state.current_page == "💬 自由聊天区":
             curr_chat["messages"][resume_idx]["_is_half"] = False
 
         if prompt:
+            # ⭐ Fix Bug 2: 自动命名后同步 title widget
             if len(curr_chat["messages"]) == 0 and curr_chat["title"] == "新对话":
-                curr_chat["title"] = prompt[:10] + ("..." if len(prompt) > 10 else "")
+                new_auto_title = prompt[:10] + ("..." if len(prompt) > 10 else "")
+                curr_chat["title"] = new_auto_title
+                _sync_widget(f"title_{st.session_state.current_chat_id}", new_auto_title)
+
             new_msg = {"role": "user", "content": prompt}
             if dyn_file and not need_resend:
                 new_msg["files"] = [{
@@ -703,6 +716,11 @@ if st.session_state.current_page == "💬 自由聊天区":
 elif st.session_state.current_page == "⚙️ 底层引擎配置":
     st.header("⚙️ 底层驱动配置")
     p_names = [p["name"] for p in st.session_state.profiles]
+
+    # ⭐ 防御：确保 active_profile_idx 在有效范围内
+    if st.session_state.active_profile_idx >= len(p_names):
+        st.session_state.active_profile_idx = 0
+
     idx = st.radio("切换引擎", range(len(p_names)), format_func=lambda x: p_names[x], index=st.session_state.active_profile_idx, horizontal=True, key="engine_selector")
     st.session_state.active_profile_idx = idx
 
@@ -762,6 +780,8 @@ elif st.session_state.current_page == "⚙️ 底层引擎配置":
             success, result = fetch_models(p["base_url"], p["api_key"])
             if success and result:
                 st.session_state.temp_models = result
+                # ⭐ Fix Bug 6: 清理旧的 picker key，防止残留值与新列表冲突
+                st.session_state.pop("model_picker", None)
                 st.success(f"✅ 获取到 {len(result)} 个模型！")
             else:
                 st.error(f"❌ 失败: {result}")
@@ -769,7 +789,11 @@ elif st.session_state.current_page == "⚙️ 底层引擎配置":
     if "temp_models" in st.session_state:
         sel_m = st.selectbox("选择模型", ["(不覆盖)"] + st.session_state.temp_models, key="model_picker")
         if sel_m != "(不覆盖)":
+            # ⭐ Fix Bug 1: 同步 model text_input 的 widget 状态
             p["model"] = sel_m
+            _sync_widget(f"pmodel_{idx}", sel_m)
+            # ⭐ Fix Bug 6: 清理 picker 残留
+            st.session_state.pop("model_picker", None)
             del st.session_state.temp_models
             trigger_save()
             st.rerun()
@@ -803,7 +827,9 @@ elif st.session_state.current_page == "⚙️ 底层引擎配置":
                        ("64K", 65536), ("128K", 131072), ("1M", 1048576), ("2M", 2000000)]
             for _ci, (lbl, val) in enumerate(presets):
                 if preset_cols[_ci].button(lbl, key=f"mt_preset_{idx}_{lbl}", use_container_width=True):
+                    # ⭐ Fix Bug 3: 同步 number_input widget 状态
                     p["max_tokens"] = val
+                    _sync_widget(f"mt_{idx}", val)
                     trigger_save()
                     st.rerun()
 
@@ -818,10 +844,16 @@ elif st.session_state.current_page == "⚙️ 底层引擎配置":
     if len(st.session_state.profiles) > 1 and st.button("🗑️ 删除此引擎", type="primary", key="del_engine"):
         st.session_state.profiles.pop(idx)
         st.session_state.active_profile_idx = 0
+        # ⭐ Fix Bug 8: 删除引擎后清理 radio widget key，防止 index 越界
+        st.session_state.pop("engine_selector", None)
+        # 清理该引擎相关的 widget keys
+        _clear_widget_keys(f"pname_{idx}", f"purl_{idx}", f"pkey_{idx}", f"pmodel_{idx}",
+                           f"ut_{idx}", f"umt_{idx}", f"mt_{idx}", f"t_{idx}",
+                           f"utp_{idx}", f"tp_{idx}", f"ufp_{idx}", f"fp_{idx}")
         trigger_save()
         st.rerun()
 
 # ==========================================
-# 统一执行保存
+# 统一执行保存（节流 + 跳过流式）
 # ==========================================
 execute_save()
