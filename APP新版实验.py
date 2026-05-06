@@ -94,13 +94,14 @@ DEFAULT_RENDER_WINDOW = 50
 STORAGE_KEY = "zenmux_data_v2"
 SAVE_THROTTLE_SEC = 2
 
+
 @st.cache_resource
 def get_local_storage():
     try:
         return LocalStorage()
-    except Exception as e:
-        print(f"[ZenMux] LocalStorage 初始化失败: {e}")
+    except Exception:
         return None
+
 
 localS = get_local_storage()
 
@@ -108,13 +109,13 @@ localS = get_local_storage()
 # ==========================================
 # Widget 同步辅助函数
 # ==========================================
-def _sync_widget(key, value):
-    """程序主动修改数据后，同步对应 widget 的内部状态"""
-    st.session_state[key] = value
+def _del_widget_key(key):
+    """删除 widget key，让下次 rerun 时 widget 用代码中的 value 参数重新初始化"""
+    st.session_state.pop(key, None)
 
 
 def _clear_widget_keys(*prefixes):
-    """批量清除指定前缀的 widget keys，防止残留旧值"""
+    """批量清除指定前缀的 widget keys"""
     to_del = [k for k in list(st.session_state.keys()) if any(k.startswith(p) for p in prefixes)]
     for k in to_del:
         del st.session_state[k]
@@ -163,7 +164,6 @@ def execute_save():
 dialog_decorator = getattr(st, "dialog", None)
 if dialog_decorator is None:
     dialog_decorator = getattr(st, "experimental_dialog", None)
-# 验证是否可调用
 if dialog_decorator is not None and not callable(dialog_decorator):
     dialog_decorator = None
 
@@ -192,7 +192,6 @@ if dialog_decorator:
 # 初始化与水合
 # ==========================================
 def _get_default_data():
-    """生成默认数据"""
     default_profiles = [{
         "name": "默认引擎", "base_url": "", "api_key": "", "model": "anthropic/claude-3-5-sonnet-20240620",
         "use_temperature": True, "temperature": 0.8, "use_max_tokens": True, "max_tokens": 4096,
@@ -224,8 +223,7 @@ if not st.session_state.initialized:
     if localS is not None:
         try:
             saved_data = localS.getItem(STORAGE_KEY, key="zm_getitem")
-        except Exception as e:
-            print(f"[ZenMux] 读取本地存储失败: {e}")
+        except Exception:
             saved_data = None
 
     st.session_state._hydration_attempts += 1
@@ -238,8 +236,8 @@ if not st.session_state.initialized:
                 st.session_state.profiles = data.get("profiles") or default_profiles
                 st.session_state.free_chats = data.get("free_chats") or default_chats
                 hydrated = True
-        except Exception as e:
-            print(f"[ZenMux] 数据解析失败: {e}")
+        except Exception:
+            pass
 
     if not hydrated and st.session_state._hydration_attempts < 2 and localS is not None and saved_data is None:
         st.session_state.profiles = default_profiles
@@ -276,7 +274,6 @@ def clean_novel_text(text):
 
 
 def count_words(text):
-    """字数统计"""
     if not text:
         return 0
     cn = sum(1 for c in text if '\u4e00' <= c <= '\u9fff')
@@ -285,7 +282,6 @@ def count_words(text):
 
 
 def render_copy_button_inline(text):
-    """内联复制按钮"""
     b64 = base64.b64encode(text.encode("utf-8")).decode("utf-8")
     return f'<button class="zm-copy-btn" onclick="window.zmCopy(this, \'{b64}\')">📋 复制</button>'
 
@@ -381,7 +377,7 @@ with st.sidebar:
     page = st.radio("导航", ["💬 自由聊天区", "⚙️ 底层引擎配置"], label_visibility="collapsed")
     st.session_state.current_page = page
 
-    # ⭐ 防御：active_profile_idx 越界
+    # 防御：active_profile_idx 越界
     if st.session_state.active_profile_idx >= len(st.session_state.profiles):
         st.session_state.active_profile_idx = 0
 
@@ -442,7 +438,6 @@ with st.sidebar:
                 with st.expander("📄 防拦截：复制快照代码"):
                     st.code(st.session_state._snapshot_data, language="json")
 
-            # ⭐ Fix Bug 7: 给 file_uploader 固定 key
             uploaded_ws = st.file_uploader("📂 导入快照 (覆盖当前)", type="json", key="import_snapshot_file")
             if uploaded_ws:
                 try:
@@ -451,7 +446,7 @@ with st.sidebar:
                     st.session_state.free_chats = data.get("free_chats", st.session_state.free_chats)
                     st.session_state.active_profile_idx = 0
                     st.session_state.current_chat_id = list(st.session_state.free_chats.keys())[-1]
-                    # ⭐ Fix Bug 4: 清除所有引擎配置相关的 widget keys
+                    # 清除所有引擎配置和对话相关的 widget keys
                     _clear_widget_keys(
                         "pname_", "purl_", "pkey_", "pmodel_",
                         "ut_", "umt_", "mt_", "t_",
@@ -635,11 +630,11 @@ if st.session_state.current_page == "💬 自由聊天区":
             curr_chat["messages"][resume_idx]["_is_half"] = False
 
         if prompt:
-            # ⭐ Fix Bug 2: 自动命名后同步 title widget
+            # 自动命名：修改数据 + 删除 widget key，下次 rerun 时 text_input 会用新 value
             if len(curr_chat["messages"]) == 0 and curr_chat["title"] == "新对话":
                 new_auto_title = prompt[:10] + ("..." if len(prompt) > 10 else "")
                 curr_chat["title"] = new_auto_title
-                _sync_widget(f"title_{st.session_state.current_chat_id}", new_auto_title)
+                _del_widget_key(f"title_{st.session_state.current_chat_id}")
 
             new_msg = {"role": "user", "content": prompt}
             if dyn_file and not need_resend:
@@ -717,7 +712,7 @@ elif st.session_state.current_page == "⚙️ 底层引擎配置":
     st.header("⚙️ 底层驱动配置")
     p_names = [p["name"] for p in st.session_state.profiles]
 
-    # ⭐ 防御：确保 active_profile_idx 在有效范围内
+    # 防御：确保 active_profile_idx 在有效范围内
     if st.session_state.active_profile_idx >= len(p_names):
         st.session_state.active_profile_idx = 0
 
@@ -780,7 +775,7 @@ elif st.session_state.current_page == "⚙️ 底层引擎配置":
             success, result = fetch_models(p["base_url"], p["api_key"])
             if success and result:
                 st.session_state.temp_models = result
-                # ⭐ Fix Bug 6: 清理旧的 picker key，防止残留值与新列表冲突
+                # 清理旧的 picker key，防止残留值与新列表冲突
                 st.session_state.pop("model_picker", None)
                 st.success(f"✅ 获取到 {len(result)} 个模型！")
             else:
@@ -789,10 +784,9 @@ elif st.session_state.current_page == "⚙️ 底层引擎配置":
     if "temp_models" in st.session_state:
         sel_m = st.selectbox("选择模型", ["(不覆盖)"] + st.session_state.temp_models, key="model_picker")
         if sel_m != "(不覆盖)":
-            # ⭐ Fix Bug 1: 同步 model text_input 的 widget 状态
+            # 修改数据 + 删除对应 widget key + rerun
             p["model"] = sel_m
-            _sync_widget(f"pmodel_{idx}", sel_m)
-            # ⭐ Fix Bug 6: 清理 picker 残留
+            _del_widget_key(f"pmodel_{idx}")
             st.session_state.pop("model_picker", None)
             del st.session_state.temp_models
             trigger_save()
@@ -827,9 +821,9 @@ elif st.session_state.current_page == "⚙️ 底层引擎配置":
                        ("64K", 65536), ("128K", 131072), ("1M", 1048576), ("2M", 2000000)]
             for _ci, (lbl, val) in enumerate(presets):
                 if preset_cols[_ci].button(lbl, key=f"mt_preset_{idx}_{lbl}", use_container_width=True):
-                    # ⭐ Fix Bug 3: 同步 number_input widget 状态
+                    # 修改数据 + 删除 widget key + rerun
                     p["max_tokens"] = val
-                    _sync_widget(f"mt_{idx}", val)
+                    _del_widget_key(f"mt_{idx}")
                     trigger_save()
                     st.rerun()
 
@@ -844,16 +838,17 @@ elif st.session_state.current_page == "⚙️ 底层引擎配置":
     if len(st.session_state.profiles) > 1 and st.button("🗑️ 删除此引擎", type="primary", key="del_engine"):
         st.session_state.profiles.pop(idx)
         st.session_state.active_profile_idx = 0
-        # ⭐ Fix Bug 8: 删除引擎后清理 radio widget key，防止 index 越界
+        # 删除引擎后清理相关 widget keys
         st.session_state.pop("engine_selector", None)
-        # 清理该引擎相关的 widget keys
-        _clear_widget_keys(f"pname_{idx}", f"purl_{idx}", f"pkey_{idx}", f"pmodel_{idx}",
-                           f"ut_{idx}", f"umt_{idx}", f"mt_{idx}", f"t_{idx}",
-                           f"utp_{idx}", f"tp_{idx}", f"ufp_{idx}", f"fp_{idx}")
+        _clear_widget_keys(
+            f"pname_{idx}", f"purl_{idx}", f"pkey_{idx}", f"pmodel_{idx}",
+            f"ut_{idx}", f"umt_{idx}", f"mt_{idx}", f"t_{idx}",
+            f"utp_{idx}", f"tp_{idx}", f"ufp_{idx}", f"fp_{idx}"
+        )
         trigger_save()
         st.rerun()
 
 # ==========================================
-# 统一执行保存（节流 + 跳过流式）
+# 统一执行保存
 # ==========================================
 execute_save()
